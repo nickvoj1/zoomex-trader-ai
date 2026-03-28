@@ -1,5 +1,5 @@
 import { corsHeaders, createAdminClient, HttpError, jsonResponse, resolveCaller } from "../_shared/auth.ts";
-import { getAccountAssets, MexcAsset } from "../_shared/mexc.ts";
+import { getAccountAssets, MexcAsset, valueMexcPortfolio } from "../_shared/mexc.ts";
 
 interface ProfileRecord {
   demo_mode: boolean;
@@ -60,6 +60,19 @@ Deno.serve(async (req) => {
         )
       : [];
     const primaryAsset = assets.find((asset) => asset.currency === "USDT") ?? assets[0] ?? null;
+    let portfolioSummary: unknown = null;
+    let portfolioAssets: unknown[] = [];
+    let portfolioValuationError: string | null = null;
+
+    if (success && assets.length > 0) {
+      try {
+        const valuation = await valueMexcPortfolio(assets);
+        portfolioSummary = valuation.summary;
+        portfolioAssets = valuation.assets;
+      } catch (error) {
+        portfolioValuationError = error instanceof Error ? error.message : String(error);
+      }
+    }
 
     return jsonResponse({
       success,
@@ -79,6 +92,9 @@ Deno.serve(async (req) => {
           bonus: toNumber(primaryAsset.bonus),
         }
         : null,
+      portfolio_summary: portfolioSummary,
+      portfolio_assets: portfolioAssets,
+      portfolio_valuation_error: portfolioValuationError,
       openai_configured: Boolean(keyRow.openai_key),
     });
   } catch (error) {

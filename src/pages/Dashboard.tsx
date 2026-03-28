@@ -53,11 +53,41 @@ interface BalanceSummary {
   bonus: number;
 }
 
+interface PortfolioSummary {
+  currency: "USDT";
+  totalUsdt: number;
+  availableUsdt: number;
+  lockedUsdt: number;
+  unrealizedUsdt: number;
+  bonusUsdt: number;
+  assetCount: number;
+  pricedAssetCount: number;
+  unpricedAssetCount: number;
+  unpricedCurrencies: string[];
+  valuationSource: string;
+}
+
+interface PortfolioAsset {
+  currency: string;
+  equity: number;
+  available: number;
+  locked: number;
+  unrealized: number;
+  bonus: number;
+  usdtPrice: number | null;
+  usdtValue: number | null;
+  conversionPath: string[] | null;
+  priced: boolean;
+}
+
 interface ConnectionTestResult {
   success: boolean;
   mode: "paper" | "live";
   assets?: ConnectionAsset[];
   balance_summary?: BalanceSummary | null;
+  portfolio_summary?: PortfolioSummary | null;
+  portfolio_assets?: PortfolioAsset[];
+  portfolio_valuation_error?: string | null;
   msg?: string | null;
   error?: string;
 }
@@ -68,6 +98,10 @@ interface BalanceSnapshot {
   locked: number;
   total: number;
   unrealized: number;
+  assetCount: number;
+  pricedAssetCount: number;
+  unpricedCurrencies: string[];
+  topHoldings: string[];
   updatedAt: string;
 }
 
@@ -186,7 +220,31 @@ function formatBalance(value: number, currency: string) {
   return currency === "USDT" ? `$${value.toFixed(2)}` : `${value.toFixed(4)} ${currency}`;
 }
 
+function buildTopHoldings(assets: PortfolioAsset[] | undefined) {
+  return (assets ?? [])
+    .filter((asset) => asset.priced && asset.usdtValue !== null && asset.usdtValue > 0)
+    .sort((left, right) => (right.usdtValue ?? 0) - (left.usdtValue ?? 0))
+    .slice(0, 3)
+    .map((asset) => `${asset.currency} ${formatBalance(asset.usdtValue ?? 0, "USDT")}`);
+}
+
 function deriveBalanceSnapshot(result: ConnectionTestResult): BalanceSnapshot | null {
+  const portfolioSummary = result.portfolio_summary;
+  if (portfolioSummary) {
+    return {
+      currency: portfolioSummary.currency,
+      available: portfolioSummary.availableUsdt,
+      locked: portfolioSummary.lockedUsdt,
+      total: portfolioSummary.totalUsdt,
+      unrealized: portfolioSummary.unrealizedUsdt,
+      assetCount: portfolioSummary.assetCount,
+      pricedAssetCount: portfolioSummary.pricedAssetCount,
+      unpricedCurrencies: portfolioSummary.unpricedCurrencies,
+      topHoldings: buildTopHoldings(result.portfolio_assets),
+      updatedAt: new Date().toISOString(),
+    };
+  }
+
   const summary = result.balance_summary;
   if (summary) {
     return {
@@ -195,6 +253,10 @@ function deriveBalanceSnapshot(result: ConnectionTestResult): BalanceSnapshot | 
       locked: summary.frozen + summary.positionMargin,
       total: summary.equity > 0 ? summary.equity : summary.available + summary.frozen + summary.positionMargin,
       unrealized: summary.unrealized,
+      assetCount: result.assets?.length ?? 0,
+      pricedAssetCount: result.assets?.length ?? 0,
+      unpricedCurrencies: [],
+      topHoldings: [],
       updatedAt: new Date().toISOString(),
     };
   }
@@ -212,6 +274,10 @@ function deriveBalanceSnapshot(result: ConnectionTestResult): BalanceSnapshot | 
     locked,
     total: equity > 0 ? equity : available + locked,
     unrealized: toNumber(asset.unrealized),
+    assetCount: result.assets?.length ?? 1,
+    pricedAssetCount: 1,
+    unpricedCurrencies: [],
+    topHoldings: [],
     updatedAt: new Date().toISOString(),
   };
 }
@@ -473,10 +539,10 @@ export default function Dashboard() {
         : "No keys";
   const accountDetail = isDemoMode
     ? balanceSnapshot
-      ? `Paper mode · MEXC ${formatBalance(balanceSnapshot.total, balanceSnapshot.currency)}`
+      ? `Paper mode · Live wallet ${formatBalance(balanceSnapshot.total, balanceSnapshot.currency)} across ${balanceSnapshot.assetCount} assets`
       : "Paper mode simulated from trade history"
     : balanceSnapshot
-      ? `Available ${formatBalance(balanceSnapshot.available, balanceSnapshot.currency)} · Locked ${formatBalance(balanceSnapshot.locked, balanceSnapshot.currency)} · Unrealized ${formatBalance(balanceSnapshot.unrealized, balanceSnapshot.currency)}`
+      ? `Available ${formatBalance(balanceSnapshot.available, balanceSnapshot.currency)} · Locked ${formatBalance(balanceSnapshot.locked, balanceSnapshot.currency)} · Unrealized ${formatBalance(balanceSnapshot.unrealized, balanceSnapshot.currency)} · ${balanceSnapshot.pricedAssetCount}/${balanceSnapshot.assetCount} assets valued`
       : balanceError || "Fetching exchange balance";
   const accountPositive = isDemoMode ? paperBalance >= PAPER_STARTING_BALANCE : Boolean(balanceSnapshot && balanceSnapshot.total > 0);
 
@@ -508,9 +574,19 @@ export default function Dashboard() {
           </div>
           <p className="mt-2 text-xs text-muted-foreground">
             {balanceSnapshot
-              ? `Available ${formatBalance(balanceSnapshot.available, balanceSnapshot.currency)} · Locked ${formatBalance(balanceSnapshot.locked, balanceSnapshot.currency)} · Unrealized ${formatBalance(balanceSnapshot.unrealized, balanceSnapshot.currency)}`
+              ? `Available ${formatBalance(balanceSnapshot.available, balanceSnapshot.currency)} · Locked ${formatBalance(balanceSnapshot.locked, balanceSnapshot.currency)} · Unrealized ${formatBalance(balanceSnapshot.unrealized, balanceSnapshot.currency)} · ${balanceSnapshot.pricedAssetCount}/${balanceSnapshot.assetCount} assets valued`
               : balanceError || (isDemoMode ? "Paper equity updates from closed trades." : "Connect MEXC keys to load your balance.")}
           </p>
+          {balanceSnapshot?.topHoldings.length ? (
+            <p className="mt-1 text-[10px] uppercase tracking-wide text-muted-foreground/70">
+              Top holdings {balanceSnapshot.topHoldings.join(" · ")}
+            </p>
+          ) : null}
+          {balanceSnapshot?.unpricedCurrencies.length ? (
+            <p className="mt-1 text-[10px] uppercase tracking-wide text-warning">
+              Unpriced {balanceSnapshot.unpricedCurrencies.join(", ")}
+            </p>
+          ) : null}
           {balanceSnapshot ? (
             <p className="mt-1 text-[10px] uppercase tracking-wide text-muted-foreground/70">
               Updated {new Date(balanceSnapshot.updatedAt).toLocaleTimeString()}

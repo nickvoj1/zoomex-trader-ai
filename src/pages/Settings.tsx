@@ -35,6 +35,36 @@ interface ConnectionAsset {
   currency: string;
   availableBalance?: number | string;
   frozenBalance?: number | string;
+  positionMargin?: number | string;
+  equity?: number | string;
+  unrealized?: number | string;
+}
+
+interface PortfolioSummary {
+  currency: "USDT";
+  totalUsdt: number;
+  availableUsdt: number;
+  lockedUsdt: number;
+  unrealizedUsdt: number;
+  bonusUsdt: number;
+  assetCount: number;
+  pricedAssetCount: number;
+  unpricedAssetCount: number;
+  unpricedCurrencies: string[];
+  valuationSource: string;
+}
+
+interface PortfolioAsset {
+  currency: string;
+  equity: number;
+  available: number;
+  locked: number;
+  unrealized: number;
+  bonus: number;
+  usdtPrice: number | null;
+  usdtValue: number | null;
+  conversionPath: string[] | null;
+  priced: boolean;
 }
 
 interface ConnectionTestResult {
@@ -43,12 +73,19 @@ interface ConnectionTestResult {
   code?: number;
   msg?: string | null;
   assets?: ConnectionAsset[];
+  portfolio_summary?: PortfolioSummary | null;
+  portfolio_assets?: PortfolioAsset[];
+  portfolio_valuation_error?: string | null;
   openai_configured?: boolean;
   error?: string;
 }
 
 function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Unknown error";
+}
+
+function formatUsd(value: number) {
+  return `$${value.toFixed(2)}`;
 }
 
 export default function SettingsPage() {
@@ -258,12 +295,40 @@ export default function SettingsPage() {
               <p className="mt-2 text-xs text-muted-foreground">
                 Mode: {connectionResult.mode} {connectionResult.code !== undefined ? `· Code ${connectionResult.code}` : ""}
               </p>
+              {connectionResult.portfolio_summary && (
+                <p className="mt-1 text-xs font-mono text-foreground/80">
+                  Portfolio {formatUsd(connectionResult.portfolio_summary.totalUsdt)} · Available{" "}
+                  {formatUsd(connectionResult.portfolio_summary.availableUsdt)} · Locked{" "}
+                  {formatUsd(connectionResult.portfolio_summary.lockedUsdt)} · Unrealized{" "}
+                  {formatUsd(connectionResult.portfolio_summary.unrealizedUsdt)} ·{" "}
+                  {connectionResult.portfolio_summary.pricedAssetCount}/{connectionResult.portfolio_summary.assetCount} assets valued
+                </p>
+              )}
               {(connectionResult.msg || connectionResult.error) && (
                 <p className="mt-1 text-xs text-muted-foreground">
                   {connectionResult.msg || connectionResult.error}
                 </p>
               )}
-              {(connectionResult.assets ?? []).length > 0 && (
+              {connectionResult.portfolio_valuation_error && (
+                <p className="mt-1 text-xs text-warning">
+                  Portfolio valuation warning: {connectionResult.portfolio_valuation_error}
+                </p>
+              )}
+              {connectionResult.portfolio_summary?.unpricedCurrencies.length ? (
+                <p className="mt-1 text-xs text-warning">
+                  Unpriced assets: {connectionResult.portfolio_summary.unpricedCurrencies.join(", ")}
+                </p>
+              ) : null}
+              {(connectionResult.portfolio_assets ?? []).length > 0 ? (
+                <div className="mt-3 space-y-1">
+                  {(connectionResult.portfolio_assets ?? []).map((asset) => (
+                    <p key={asset.currency} className="text-xs font-mono text-foreground/80">
+                      {asset.currency}: equity {asset.equity.toFixed(4)} · free {asset.available.toFixed(4)} · locked{" "}
+                      {asset.locked.toFixed(4)} · value {asset.usdtValue !== null ? formatUsd(asset.usdtValue) : "n/a"}
+                    </p>
+                  ))}
+                </div>
+              ) : (connectionResult.assets ?? []).length > 0 ? (
                 <div className="mt-3 space-y-1">
                   {(connectionResult.assets ?? []).map((asset) => (
                     <p key={asset.currency} className="text-xs font-mono text-foreground/80">
@@ -272,7 +337,7 @@ export default function SettingsPage() {
                     </p>
                   ))}
                 </div>
-              )}
+              ) : null}
             </div>
           )}
         </CardContent>
