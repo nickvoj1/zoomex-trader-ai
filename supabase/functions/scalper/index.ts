@@ -39,17 +39,20 @@ async function mexcFuturesPrivate(
   params["timestamp"] = timestamp;
   const paramStr = Object.keys(params).sort().map(k => `${k}=${params[k]}`).join("&");
   const signature = await hmacSHA256(apiSecret, paramStr);
+  const fullParams = paramStr + "&signature=" + signature;
 
-  const url = `${baseUrl}${path}`;
-  const body = paramStr + "&signature=" + signature;
+  const isGet = method.toUpperCase() === "GET";
+  const url = isGet ? `${baseUrl}${path}?${fullParams}` : `${baseUrl}${path}`;
 
   const res = await fetch(url, {
     method,
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
       "ApiKey": apiKey,
+      "Request-Time": timestamp,
+      "Signature": signature,
     },
-    body,
+    ...(isGet ? {} : { body: fullParams }),
   });
   return res.json();
 }
