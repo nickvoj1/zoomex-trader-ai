@@ -192,7 +192,15 @@ export type Database = {
           symbol?: string
           user_id?: string | null
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "model_artifacts_source_run_id_fkey"
+            columns: ["source_run_id"]
+            isOneToOne: false
+            referencedRelation: "research_runs"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       position_reconciliations: {
         Row: {
@@ -408,64 +416,72 @@ export type Database = {
           trade_id?: string
           user_id?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "trade_tca_trade_id_fkey"
+            columns: ["trade_id"]
+            isOneToOne: true
+            referencedRelation: "trades"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       trades: {
         Row: {
           closed_at: string | null
           created_at: string
-          entry_price: number
           entry_confidence: number | null
+          entry_price: number
           exit_price: number | null
           id: string
           leverage: number
           pnl: number | null
+          setup_type: string | null
           side: string
           size: number
           sl: number | null
-          setup_type: string | null
           status: Database["public"]["Enums"]["trade_status"]
           symbol: string
-          trade_metadata: Json | null
           tp: number | null
+          trade_metadata: Json | null
           user_id: string
         }
         Insert: {
           closed_at?: string | null
           created_at?: string
-          entry_price: number
           entry_confidence?: number | null
+          entry_price: number
           exit_price?: number | null
           id?: string
           leverage?: number
           pnl?: number | null
+          setup_type?: string | null
           side: string
           size: number
           sl?: number | null
-          setup_type?: string | null
           status?: Database["public"]["Enums"]["trade_status"]
           symbol?: string
-          trade_metadata?: Json | null
           tp?: number | null
+          trade_metadata?: Json | null
           user_id: string
         }
         Update: {
           closed_at?: string | null
           created_at?: string
-          entry_price?: number
           entry_confidence?: number | null
+          entry_price?: number
           exit_price?: number | null
           id?: string
           leverage?: number
           pnl?: number | null
+          setup_type?: string | null
           side?: string
           size?: number
           sl?: number | null
-          setup_type?: string | null
           status?: Database["public"]["Enums"]["trade_status"]
           symbol?: string
-          trade_metadata?: Json | null
           tp?: number | null
+          trade_metadata?: Json | null
           user_id?: string
         }
         Relationships: []

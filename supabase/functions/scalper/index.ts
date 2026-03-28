@@ -17,13 +17,13 @@ import {
   StrategySetup,
   toStopAndTakeProfit,
   TradeAction,
-} from "../../../src/lib/strategy-core.ts";
-import { fetchCrossVenueSnapshot } from "../../../src/lib/market-intel.ts";
+} from "../_shared/strategy-core.ts";
+import { fetchCrossVenueSnapshot } from "../_shared/market-intel.ts";
 import {
   extractFeatureMap,
   LogisticModelArtifact,
   predictLogisticProbability,
-} from "../../../src/lib/quant-research.ts";
+} from "../_shared/quant-research.ts";
 
 const LOOP_DURATION_MS = 50_000;
 const PAPER_STARTING_BALANCE = 10_000;
@@ -321,7 +321,7 @@ function applyModelOverlay(
   if (delta < -0.08) {
     return {
       ...decision,
-      action: "hold",
+      action: "hold" as TradeAction,
       confidence: clamp(decision.confidence + confidenceAdjustment, 0, 99),
       reasoning: `${decision.reasoning} · model vetoed ${decision.action} (${(probability * 100).toFixed(1)}% < ${(threshold * 100).toFixed(1)}%)`,
       features: {
@@ -420,7 +420,7 @@ async function applyAiOverlay(
   if (aiReview.verdict === "veto") {
     return {
       ...decision,
-      action: "hold",
+      action: "hold" as TradeAction,
       reasoning: `${decision.reasoning} · AI vetoed: ${aiReview.reasoning}`,
     };
   }
