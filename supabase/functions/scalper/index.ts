@@ -114,11 +114,11 @@ function detectVolumeSpike(volumes: number[], threshold = 2.0): boolean {
 
 // ── Fetch MEXC Futures klines ───────────────────────────────────────
 
-async function fetchFuturesOHLCV(): Promise<{
+async function fetchFuturesOHLCV(baseUrl: string): Promise<{
   closes: number[]; volumes: number[]; currentPrice: number;
   candles: Array<{ open: number; high: number; low: number; close: number; vol: number }>;
 }> {
-  const data = await mexcFuturesGet("/api/v1/contract/kline/BTC_USDT", {
+  const data = await mexcFuturesGet(baseUrl, "/api/v1/contract/kline/BTC_USDT", {
     interval: "Min1",
     limit: "50",
   });
