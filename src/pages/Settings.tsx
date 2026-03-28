@@ -16,8 +16,8 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false);
 
   const [keys, setKeys] = useState({
-    zoomex_key: "",
-    zoomex_secret: "",
+    mexc_key: "",
+    mexc_secret: "",
     coincodex_key: "",
     openai_key: "",
     telegram_token: "",
