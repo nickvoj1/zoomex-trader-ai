@@ -302,7 +302,7 @@ Deno.serve(async (req) => {
 
     for (const profile of profiles) {
       const { user_id, max_risk_pct, leverage, telegram_id, demo_mode } = profile as any;
-      const baseUrl = demo_mode ? MEXC_FUTURES_DEMO : MEXC_FUTURES_LIVE;
+      const baseUrl = MEXC_FUTURES;
       console.log(`User ${user_id}: ${demo_mode ? "DEMO" : "LIVE"} mode`);
 
       const { data: keys } = await supabaseAdmin
