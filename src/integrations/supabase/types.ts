@@ -19,34 +19,34 @@ export type Database = {
           coincodex_key: string | null
           created_at: string
           id: string
+          mexc_key: string | null
+          mexc_secret: string | null
           openai_key: string | null
           telegram_token: string | null
           updated_at: string
           user_id: string
-          zoomex_key: string | null
-          zoomex_secret: string | null
         }
         Insert: {
           coincodex_key?: string | null
           created_at?: string
           id?: string
+          mexc_key?: string | null
+          mexc_secret?: string | null
           openai_key?: string | null
           telegram_token?: string | null
           updated_at?: string
           user_id: string
-          zoomex_key?: string | null
-          zoomex_secret?: string | null
         }
         Update: {
           coincodex_key?: string | null
           created_at?: string
           id?: string
+          mexc_key?: string | null
+          mexc_secret?: string | null
           openai_key?: string | null
           telegram_token?: string | null
           updated_at?: string
           user_id?: string
-          zoomex_key?: string | null
-          zoomex_secret?: string | null
         }
         Relationships: []
       }
