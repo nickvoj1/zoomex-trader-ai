@@ -247,7 +247,7 @@ Deno.serve(async (req) => {
     // Get users with auto_trade enabled (or specific user for manual trade)
     let profilesQuery = supabaseAdmin
       .from("profiles")
-      .select("user_id, auto_trade, max_risk_pct, leverage, telegram_id");
+      .select("user_id, auto_trade, max_risk_pct, leverage, telegram_id, demo_mode");
 
     if (manualUserId) {
       profilesQuery = profilesQuery.eq("user_id", manualUserId);
