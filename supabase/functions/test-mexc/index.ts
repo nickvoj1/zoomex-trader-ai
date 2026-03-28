@@ -53,7 +53,7 @@ Deno.serve(async (req) => {
 
     return new Response(JSON.stringify({
       success,
-      mode: "futures",
+      mode: demoMode ? "demo" : "live",
       code: data?.code,
       msg: data?.msg,
       assets,
