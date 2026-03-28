@@ -11,14 +11,19 @@ import {
   csvNumberArg,
   defaultStrategySettings,
   ensureParentDirectory,
-  loadCandlesFromCsv,
+  loadCandleDatasetFromCsv,
+  loadMicrostructureHistoryFromJson,
   numberArg,
   parseArgs,
   stringArg,
   timestampedFile,
   writeJson,
 } from "./shared";
-import { insertModelArtifact, insertResearchRun } from "./supabase";
+import {
+  fetchHistoricalMicrostructureSnapshots,
+  insertModelArtifact,
+  insertResearchRun,
+} from "./supabase";
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
@@ -30,7 +35,21 @@ async function main() {
   const outputDir = stringArg(args, "output-dir", path.join("research", timestampedFile("cycle", "dir").replace(/\.dir$/, "")))!;
   await ensureParentDirectory(path.join(outputDir, "placeholder.txt"));
   const userId = stringArg(args, "user-id", process.env.BOT_USER_ID) ?? null;
-  const candles = await loadCandlesFromCsv(input);
+  const dataset = await loadCandleDatasetFromCsv(input);
+  const candles = dataset.candles;
+  const snapshotsFile = stringArg(args, "snapshots-file");
+  const firstCandle = candles[0];
+  const lastCandle = candles.length > 0 ? candles[candles.length - 1] : undefined;
+  const startAt = firstCandle?.timestamp ? new Date(firstCandle.timestamp - 30 * 60_000).toISOString() : undefined;
+  const endAt = lastCandle?.timestamp ? new Date(lastCandle.timestamp + 60_000).toISOString() : undefined;
+  const fileHistory = snapshotsFile ? await loadMicrostructureHistoryFromJson(snapshotsFile) : [];
+  const supabaseHistory = await fetchHistoricalMicrostructureSnapshots({
+    symbol: "BTCUSDT",
+    startAt,
+    endAt,
+  }).catch(() => []);
+  const microstructureHistory = [...fileHistory, ...supabaseHistory];
+  const microstructureLookbackMs = numberArg(args, "micro-lookback-minutes", 15) * 60_000;
   const base = defaultStrategySettings();
   const parameterSpace: ParameterSpace = {
     riskPct: csvNumberArg(args, "risk-pct", [0.25, 0.5, 0.75]),
@@ -63,16 +82,21 @@ async function main() {
     side: "long",
     horizonBars: numberArg(args, "horizon-bars", 15),
     moveThresholdPct: numberArg(args, "move-threshold-pct", 0.18),
+    microstructureHistory,
+    microstructureLookbackMs,
   });
   const shortModel = trainLogisticModel(candles, best.settings, {
     side: "short",
     horizonBars: numberArg(args, "horizon-bars", 15),
     moveThresholdPct: numberArg(args, "move-threshold-pct", 0.18),
+    microstructureHistory,
+    microstructureLookbackMs,
   });
 
   const summary = {
     createdAt: new Date().toISOString(),
     input,
+    dataQuality: dataset.quality,
     bestSettings: best.settings,
     bestSweepScore: best.score,
     bestSweepResult: {
@@ -86,6 +110,7 @@ async function main() {
     walkForward: walkForward.aggregate,
     longModel: longModel.metrics,
     shortModel: shortModel.metrics,
+    microstructureSnapshots: microstructureHistory.length,
   };
 
   const sweepPath = path.join(outputDir, "parameter-sweep.json");
@@ -111,6 +136,8 @@ async function main() {
       input,
       candidates: candidates.length,
       outputDir,
+      microstructureSnapshots: microstructureHistory.length,
+      dataQuality: dataset.quality,
     },
     summary,
     artifact_path: summaryPath,

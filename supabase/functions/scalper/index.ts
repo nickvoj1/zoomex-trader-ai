@@ -9,6 +9,7 @@ import {
   submitOrder,
 } from "../_shared/mexc.ts";
 import {
+  buildMarketMicrostructure,
   buildMarketState,
   calculatePositionSize,
   deriveAdvancedDecision,
@@ -21,7 +22,9 @@ import {
 import { fetchCrossVenueSnapshot } from "../_shared/market-intel.ts";
 import {
   extractFeatureMap,
+  HistoricalMicrostructureSnapshot,
   LogisticModelArtifact,
+  prepareHistoricalMicrostructure,
   predictLogisticProbability,
 } from "../_shared/quant-research.ts";
 
@@ -86,6 +89,18 @@ interface LiquidationMetricsRow {
   created_at: string;
   liquidation_bias: number | null;
   liquidation_intensity: number | null;
+}
+
+interface MicrostructureHistoryRow extends LiquidationMetricsRow {
+  raw_payload: Record<string, unknown> | null;
+  spread_bps: number | null;
+  imbalance: number | null;
+  funding_rate_pct_8h: number | null;
+  open_interest_usd: number | null;
+  open_interest_change_pct: number | null;
+  long_short_ratio: number | null;
+  taker_imbalance: number | null;
+  cross_venue_basis_bps: number | null;
 }
 
 interface ModelArtifactRow {
@@ -312,6 +327,62 @@ async function getLatestLiquidationMetrics(supabaseAdmin: ReturnType<typeof crea
   };
 }
 
+function rowToHistoricalMicrostructure(row: MicrostructureHistoryRow): HistoricalMicrostructureSnapshot | null {
+  const timestamp = Date.parse(row.created_at);
+  if (!Number.isFinite(timestamp)) {
+    return null;
+  }
+
+  const rawPayload = row.raw_payload;
+  const rawMicrostructure = rawPayload && typeof rawPayload === "object" && rawPayload.microstructure && typeof rawPayload.microstructure === "object"
+    ? rawPayload.microstructure
+    : null;
+
+  return {
+    timestamp,
+    microstructure: (rawMicrostructure as ReturnType<typeof buildMarketMicrostructure>) ?? buildMarketMicrostructure({
+      fundingRatePct8h: row.funding_rate_pct_8h,
+      openInterestUsd: row.open_interest_usd,
+      openInterestChangePct: row.open_interest_change_pct,
+      longShortRatio: row.long_short_ratio,
+      takerImbalance: row.taker_imbalance,
+      liquidationBias: row.liquidation_bias,
+      liquidationIntensity: row.liquidation_intensity,
+      crossVenueBasisBps: row.cross_venue_basis_bps,
+    }),
+    source: "supabase",
+  };
+}
+
+async function getRecentMicrostructureHistory(
+  supabaseAdmin: ReturnType<typeof createAdminClient>,
+  windowMinutes = 90,
+) {
+  const sinceIso = new Date(Date.now() - windowMinutes * 60_000).toISOString();
+  const { data, error } = await supabaseAdmin
+    .from("market_snapshots")
+    .select(
+      "created_at, raw_payload, spread_bps, imbalance, funding_rate_pct_8h, open_interest_usd, open_interest_change_pct, long_short_ratio, taker_imbalance, liquidation_bias, liquidation_intensity, cross_venue_basis_bps",
+    )
+    .eq("venue", "composite")
+    .eq("snapshot_type", "microstructure")
+    .eq("symbol", DB_SYMBOL)
+    .gte("created_at", sinceIso)
+    .order("created_at", { ascending: true })
+    .limit(180);
+
+  if (error) {
+    console.error("Failed to load microstructure history:", error);
+    return [];
+  }
+
+  return prepareHistoricalMicrostructure(
+    ((data ?? []) as MicrostructureHistoryRow[])
+      .map((row) => rowToHistoricalMicrostructure(row))
+      .filter((row): row is HistoricalMicrostructureSnapshot => row !== null),
+  );
+}
+
 async function loadLatestSignalModels(
   supabaseAdmin: ReturnType<typeof createAdminClient>,
   userId: string,
@@ -345,12 +416,19 @@ function applyModelOverlay(
   settings: StrategySettings,
   decision: StrategyDecision,
   models: { longModel: LogisticModelArtifact | null; shortModel: LogisticModelArtifact | null },
+  microstructureOptions: {
+    liveMicrostructure?: Parameters<typeof buildMarketState>[3];
+    microstructureHistory?: HistoricalMicrostructureSnapshot[];
+  } = {},
 ) {
   if (!models.longModel && !models.shortModel) {
     return decision;
   }
 
-  const { featureMap } = extractFeatureMap(candles, candles.length - 1, settings);
+  const { featureMap } = extractFeatureMap(candles, candles.length - 1, settings, {
+    liveMicrostructure: microstructureOptions.liveMicrostructure ?? null,
+    microstructureHistory: microstructureOptions.microstructureHistory ?? [],
+  });
   const longProbability = models.longModel ? predictLogisticProbability(models.longModel, featureMap) : null;
   const shortProbability = models.shortModel ? predictLogisticProbability(models.shortModel, featureMap) : null;
   const sharedFeatures = {
@@ -896,6 +974,17 @@ Deno.serve(async (req) => {
     const crossVenueSnapshot = await fetchCrossVenueSnapshot({
       liquidationMetrics: liquidationMetrics ?? undefined,
     });
+    const recentMicrostructureHistory = await getRecentMicrostructureHistory(supabaseAdmin);
+    const modelMicrostructureHistory = prepareHistoricalMicrostructure([
+      ...recentMicrostructureHistory,
+      ...(crossVenueSnapshot.microstructure
+        ? [{
+          timestamp: crossVenueSnapshot.fetchedAt,
+          microstructure: crossVenueSnapshot.microstructure,
+          source: "live",
+        } satisfies HistoricalMicrostructureSnapshot]
+        : []),
+    ]);
     const results: Array<{ userId: string; action: string; detail: string }> = [];
 
     for (const profile of profiles) {
@@ -960,7 +1049,10 @@ Deno.serve(async (req) => {
           crossVenueSnapshot.microstructure,
         );
         decision = deriveAdvancedDecision(marketState, settings, sessionRisk);
-        decision = applyModelOverlay(candles, settings, decision, models);
+        decision = applyModelOverlay(candles, settings, decision, models, {
+          liveMicrostructure: crossVenueSnapshot.microstructure,
+          microstructureHistory: modelMicrostructureHistory,
+        });
         decision = await applyAiOverlay(keys, decision, marketState, manualSide);
       }
 

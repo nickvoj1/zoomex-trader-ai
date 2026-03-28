@@ -3,7 +3,7 @@ import {
   csvBooleanArg,
   csvNumberArg,
   defaultStrategySettings,
-  loadCandlesFromCsv,
+  loadCandleDatasetFromCsv,
   numberArg,
   parseArgs,
   stringArg,
@@ -23,7 +23,8 @@ async function main() {
   const output = stringArg(args, "output", `research/${timestampedFile("parameter-sweep", "json")}`)!;
   const limit = numberArg(args, "limit", 96);
   const top = numberArg(args, "top", 20);
-  const candles = await loadCandlesFromCsv(input);
+  const dataset = await loadCandleDatasetFromCsv(input);
+  const candles = dataset.candles;
   const base = defaultStrategySettings();
   const candidates = buildParameterGrid(base, {
     riskPct: csvNumberArg(args, "risk-pct", [0.25, 0.5, 0.75]),
@@ -61,6 +62,7 @@ async function main() {
   await writeJson(output, {
     createdAt: new Date().toISOString(),
     input,
+    dataQuality: dataset.quality,
     objective,
     candidates: candidates.length,
     top: summary,
@@ -74,8 +76,10 @@ async function main() {
     config: {
       input,
       candidates: candidates.length,
+      dataQuality: dataset.quality,
     },
     summary: {
+      dataQuality: dataset.quality,
       top: summary,
     },
     artifact_path: output,

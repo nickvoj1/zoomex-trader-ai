@@ -1,19 +1,33 @@
 import { trainLogisticModel } from "../../src/lib/quant-research";
 import {
   defaultStrategySettings,
-  loadCandlesFromCsv,
+  loadCandleDatasetFromCsv,
+  loadMicrostructureHistoryFromJson,
   numberArg,
   parseArgs,
   stringArg,
   timestampedFile,
   writeJson,
 } from "./shared";
-import { insertModelArtifact, insertResearchRun } from "./supabase";
+import { fetchHistoricalMicrostructureSnapshots, insertModelArtifact, insertResearchRun } from "./supabase";
 
 async function trainSide(input: string, side: "long" | "short", output: string) {
-  const candles = await loadCandlesFromCsv(input);
+  const dataset = await loadCandleDatasetFromCsv(input);
+  const candles = dataset.candles;
   const settings = defaultStrategySettings();
   const args = parseArgs(process.argv.slice(2));
+  const snapshotsFile = stringArg(args, "snapshots-file");
+  const firstCandle = candles[0];
+  const lastCandle = candles.length > 0 ? candles[candles.length - 1] : undefined;
+  const startAt = firstCandle?.timestamp ? new Date(firstCandle.timestamp - 30 * 60_000).toISOString() : undefined;
+  const endAt = lastCandle?.timestamp ? new Date(lastCandle.timestamp + 60_000).toISOString() : undefined;
+  const fileHistory = snapshotsFile ? await loadMicrostructureHistoryFromJson(snapshotsFile) : [];
+  const supabaseHistory = await fetchHistoricalMicrostructureSnapshots({
+    symbol: "BTCUSDT",
+    startAt,
+    endAt,
+  }).catch(() => []);
+  const microstructureHistory = [...fileHistory, ...supabaseHistory];
   const model = trainLogisticModel(candles, settings, {
     side,
     horizonBars: numberArg(args, "horizon-bars", 15),
@@ -23,11 +37,14 @@ async function trainSide(input: string, side: "long" | "short", output: string) 
     epochs: numberArg(args, "epochs", 220),
     learningRate: numberArg(args, "learning-rate", 0.03),
     regularization: numberArg(args, "regularization", 0.0005),
+    microstructureHistory,
+    microstructureLookbackMs: numberArg(args, "micro-lookback-minutes", 15) * 60_000,
   });
 
   await writeJson(output, {
     createdAt: new Date().toISOString(),
     input,
+    dataQuality: dataset.quality,
     model,
   });
 
@@ -44,8 +61,13 @@ async function trainSide(input: string, side: "long" | "short", output: string) 
       epochs: model.epochs,
       learningRate: model.learningRate,
       regularization: model.regularization,
+      microstructureSnapshots: microstructureHistory.length,
+      dataQuality: dataset.quality,
     },
-    summary: model.metrics,
+    summary: {
+      dataQuality: dataset.quality,
+      metrics: model.metrics,
+    },
     artifact_path: output,
   }).catch(() => null);
 

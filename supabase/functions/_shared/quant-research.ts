@@ -3,6 +3,7 @@ import {
   buildMarketState,
   deriveAdvancedDecision,
   MarketCandle,
+  MarketMicrostructure,
   normalizeCandles,
   RegimeKind,
   simulateStrategy,
@@ -93,6 +94,18 @@ export interface TrainingExample {
   features: number[];
 }
 
+export interface HistoricalMicrostructureSnapshot {
+  timestamp: number;
+  microstructure: MarketMicrostructure | null;
+  source?: string | null;
+}
+
+export interface FeatureExtractionOptions {
+  microstructureHistory?: HistoricalMicrostructureSnapshot[] | null;
+  liveMicrostructure?: MarketMicrostructure | null;
+  microstructureLookbackMs?: number;
+}
+
 export interface BinaryClassificationMetrics {
   loss: number;
   accuracy: number;
@@ -134,6 +147,8 @@ export interface TrainLogisticOptions {
   epochs?: number;
   learningRate?: number;
   regularization?: number;
+  microstructureHistory?: HistoricalMicrostructureSnapshot[];
+  microstructureLookbackMs?: number;
 }
 
 const DEFAULT_OBJECTIVE: SweepObjective = "composite";
@@ -149,6 +164,20 @@ function clamp(value: number, min: number, max: number) {
 function average(values: number[]) {
   if (values.length === 0) return 0;
   return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function finiteNumber(value: number | null | undefined) {
+  return value !== null && value !== undefined && Number.isFinite(value) ? value : null;
+}
+
+function averageDefined(values: Array<number | null | undefined>) {
+  const filtered = values.filter((value): value is number => value !== null && value !== undefined && Number.isFinite(value));
+  return filtered.length === 0 ? 0 : average(filtered);
+}
+
+function safeLog10(value: number | null | undefined) {
+  const numeric = finiteNumber(value);
+  return numeric === null || numeric <= 0 ? 0 : Math.log10(numeric + 1);
 }
 
 function sigmoid(value: number) {
@@ -326,6 +355,118 @@ export function walkForwardOptimize(
   };
 }
 
+export function prepareHistoricalMicrostructure(history: HistoricalMicrostructureSnapshot[] = []) {
+  return [...history]
+    .filter((entry) => Number.isFinite(entry.timestamp))
+    .sort((left, right) => left.timestamp - right.timestamp);
+}
+
+interface HistoricalMicrostructureContext {
+  current: MarketMicrostructure | null;
+  recent: HistoricalMicrostructureSnapshot[];
+}
+
+function upperBoundByTimestamp(history: HistoricalMicrostructureSnapshot[], timestamp: number) {
+  let low = 0;
+  let high = history.length;
+  while (low < high) {
+    const mid = Math.floor((low + high) / 2);
+    if (history[mid].timestamp <= timestamp) low = mid + 1;
+    else high = mid;
+  }
+  return low;
+}
+
+function resolveHistoricalMicrostructureContext(
+  history: HistoricalMicrostructureSnapshot[] = [],
+  timestamp: number | undefined,
+  liveMicrostructure: MarketMicrostructure | null | undefined,
+  lookbackMs = 15 * 60 * 1000,
+): HistoricalMicrostructureContext {
+  if (timestamp === undefined || history.length === 0) {
+    return {
+      current: liveMicrostructure ?? null,
+      recent: liveMicrostructure && timestamp !== undefined
+        ? [{ timestamp, microstructure: liveMicrostructure, source: "live" }]
+        : [],
+    };
+  }
+
+  const endExclusive = upperBoundByTimestamp(history, timestamp);
+  const lowerBoundTimestamp = timestamp - lookbackMs;
+  const startInclusive = upperBoundByTimestamp(history, lowerBoundTimestamp - 1);
+  const recentBase = history.slice(startInclusive, endExclusive);
+  const recent = liveMicrostructure
+    ? [...recentBase, { timestamp, microstructure: liveMicrostructure, source: "live" }]
+    : recentBase;
+  const current = liveMicrostructure ?? recentBase[recentBase.length - 1]?.microstructure ?? null;
+
+  return { current, recent };
+}
+
+function extractMicrostructureFeatures(context: HistoricalMicrostructureContext) {
+  const current = context.current;
+  const recent = context.recent;
+  const currentPrimaryImbalance = current?.primaryBook?.imbalance ?? 0;
+  const currentSecondaryImbalance = current?.secondaryBook?.imbalance ?? 0;
+  const currentSpread = current?.primaryBook?.spreadBps ?? 0;
+  const currentBasis = current?.crossVenueBasisBps ?? 0;
+  const currentCrowding = current?.crowdingScore ?? 0;
+  const currentPressure = averageDefined([
+    currentPrimaryImbalance,
+    currentSecondaryImbalance,
+    current?.takerImbalance,
+    current?.liquidationBias,
+  ]);
+  const recentPressure = recent.map((entry) =>
+    averageDefined([
+      entry.microstructure?.primaryBook?.imbalance,
+      entry.microstructure?.secondaryBook?.imbalance,
+      entry.microstructure?.takerImbalance,
+      entry.microstructure?.liquidationBias,
+    ])
+  );
+  const firstPressure = recentPressure[0] ?? 0;
+  const lastPressure = recentPressure[recentPressure.length - 1] ?? currentPressure;
+  const spreadSeries = recent.map((entry) => entry.microstructure?.primaryBook?.spreadBps ?? 0);
+  const basisSeries = recent.map((entry) => entry.microstructure?.crossVenueBasisBps ?? 0);
+  const crowdingSeries = recent.map((entry) => entry.microstructure?.crowdingScore ?? 0);
+
+  return {
+    micro_has_snapshot: current ? 1 : 0,
+    micro_snapshot_count: recent.length,
+    micro_primary_spread_bps: currentSpread,
+    micro_primary_imbalance: currentPrimaryImbalance,
+    micro_secondary_spread_bps: current?.secondaryBook?.spreadBps ?? 0,
+    micro_secondary_imbalance: currentSecondaryImbalance,
+    micro_book_agreement: current
+      ? 1 - Math.min(Math.abs(currentPrimaryImbalance - currentSecondaryImbalance), 2) / 2
+      : 0,
+    micro_funding_rate_pct8h: current?.fundingRatePct8h ?? 0,
+    micro_open_interest_log10: safeLog10(current?.openInterestUsd),
+    micro_open_interest_change_pct: current?.openInterestChangePct ?? 0,
+    micro_long_short_ratio: current?.longShortRatio ?? 1,
+    micro_taker_imbalance: current?.takerImbalance ?? 0,
+    micro_liquidation_bias: current?.liquidationBias ?? 0,
+    micro_liquidation_intensity: current?.liquidationIntensity ?? 0,
+    micro_cross_venue_basis_bps: currentBasis,
+    micro_crowding_score: currentCrowding,
+    micro_primary_imbalance_mean: averageDefined(recent.map((entry) => entry.microstructure?.primaryBook?.imbalance)),
+    micro_taker_imbalance_mean: averageDefined(recent.map((entry) => entry.microstructure?.takerImbalance)),
+    micro_liquidation_bias_mean: averageDefined(recent.map((entry) => entry.microstructure?.liquidationBias)),
+    micro_liquidation_intensity_mean: averageDefined(recent.map((entry) => entry.microstructure?.liquidationIntensity)),
+    micro_spread_bps_mean: averageDefined(recent.map((entry) => entry.microstructure?.primaryBook?.spreadBps)),
+    micro_basis_bps_mean: averageDefined(recent.map((entry) => entry.microstructure?.crossVenueBasisBps)),
+    micro_open_interest_change_mean: averageDefined(recent.map((entry) => entry.microstructure?.openInterestChangePct)),
+    micro_crowding_mean: averageDefined(recent.map((entry) => entry.microstructure?.crowdingScore)),
+    micro_pressure_alignment: currentPressure,
+    micro_pressure_trend: lastPressure - firstPressure,
+    micro_crowding_change: (crowdingSeries[crowdingSeries.length - 1] ?? currentCrowding) - (crowdingSeries[0] ?? currentCrowding),
+    micro_spread_change_bps: (spreadSeries[spreadSeries.length - 1] ?? currentSpread) - (spreadSeries[0] ?? currentSpread),
+    micro_basis_change_bps: (basisSeries[basisSeries.length - 1] ?? currentBasis) - (basisSeries[0] ?? currentBasis),
+  };
+}
+
 export const TRAINING_FEATURE_NAMES = [
   "tf1_rsi",
   "tf1_atr_pct",
@@ -383,10 +524,51 @@ export const TRAINING_FEATURE_NAMES = [
   "edge_to_cost_ratio",
   "risk_multiplier",
   "leverage_multiplier",
+  "micro_has_snapshot",
+  "micro_snapshot_count",
+  "micro_primary_spread_bps",
+  "micro_primary_imbalance",
+  "micro_secondary_spread_bps",
+  "micro_secondary_imbalance",
+  "micro_book_agreement",
+  "micro_funding_rate_pct8h",
+  "micro_open_interest_log10",
+  "micro_open_interest_change_pct",
+  "micro_long_short_ratio",
+  "micro_taker_imbalance",
+  "micro_liquidation_bias",
+  "micro_liquidation_intensity",
+  "micro_cross_venue_basis_bps",
+  "micro_crowding_score",
+  "micro_primary_imbalance_mean",
+  "micro_taker_imbalance_mean",
+  "micro_liquidation_bias_mean",
+  "micro_liquidation_intensity_mean",
+  "micro_spread_bps_mean",
+  "micro_basis_bps_mean",
+  "micro_open_interest_change_mean",
+  "micro_crowding_mean",
+  "micro_pressure_alignment",
+  "micro_pressure_trend",
+  "micro_crowding_change",
+  "micro_spread_change_bps",
+  "micro_basis_change_bps",
 ] as const;
 
-export function extractFeatureMap(candles: MarketCandle[], index: number, settings: StrategySettings) {
-  const state = buildMarketState(candles.slice(0, index + 1), null);
+export function extractFeatureMap(
+  candles: MarketCandle[],
+  index: number,
+  settings: StrategySettings,
+  options: FeatureExtractionOptions = {},
+) {
+  const timestamp = candles[index]?.timestamp;
+  const microContext = resolveHistoricalMicrostructureContext(
+    options.microstructureHistory ?? [],
+    timestamp,
+    options.liveMicrostructure ?? null,
+    options.microstructureLookbackMs ?? 15 * 60 * 1000,
+  );
+  const state = buildMarketState(candles.slice(0, index + 1), null, null, microContext.current);
   const decision = deriveAdvancedDecision(state, settings, {
     startingBalance: 10_000,
     currentBalance: 10_000,
@@ -401,6 +583,7 @@ export function extractFeatureMap(candles: MarketCandle[], index: number, settin
     const value = decision.features[key];
     return typeof value === "number" && Number.isFinite(value) ? value : 0;
   };
+  const microFeatures = extractMicrostructureFeatures(microContext);
   const featureMap: Record<string, number> = {
     tf1_rsi: tf1.rsi,
     tf1_atr_pct: tf1.atrPct * 100,
@@ -461,6 +644,7 @@ export function extractFeatureMap(candles: MarketCandle[], index: number, settin
     edge_to_cost_ratio: featureValue("edgeToCostRatio"),
     risk_multiplier: featureValue("riskMultiplier"),
     leverage_multiplier: featureValue("leverageMultiplier"),
+    ...microFeatures,
   };
 
   return {
@@ -478,8 +662,10 @@ export function buildTrainingExamples(
   moveThresholdPct = 0.18,
   feeBps = 4,
   slippageBps = 3,
+  options: FeatureExtractionOptions = {},
 ) {
   const normalized = normalizeCandles(candles);
+  const preparedMicrostructureHistory = prepareHistoricalMicrostructure(options.microstructureHistory ?? []);
   const warmup = 15 * 50;
   const costPct = (feeBps + slippageBps) / 100;
   const rows: TrainingExample[] = [];
@@ -493,7 +679,10 @@ export function buildTrainingExamples(
     const futureReturnPct = ((futureClose - current.close) / current.close) * 100;
     const futureMaxUpPct = ((futureMaxHigh - current.close) / current.close) * 100;
     const futureMaxDownPct = ((current.close - futureMinLow) / current.close) * 100;
-    const { decision, featureMap, features } = extractFeatureMap(normalized, index, settings);
+    const { decision, featureMap, features } = extractFeatureMap(normalized, index, settings, {
+      ...options,
+      microstructureHistory: preparedMicrostructureHistory,
+    });
     const labelLong = futureMaxUpPct - costPct >= moveThresholdPct && futureMaxDownPct <= moveThresholdPct * 1.5 ? 1 : 0;
     const labelShort = futureMaxDownPct - costPct >= moveThresholdPct && futureMaxUpPct <= moveThresholdPct * 1.5 ? 1 : 0;
 
@@ -643,7 +832,10 @@ export function trainLogisticModel(
   const moveThresholdPct = options.moveThresholdPct ?? 0.18;
   const feeBps = options.feeBps ?? settings.feeBps;
   const slippageBps = options.slippageBps ?? settings.slippageBps;
-  const examples = buildTrainingExamples(candles, settings, horizonBars, moveThresholdPct, feeBps, slippageBps);
+  const examples = buildTrainingExamples(candles, settings, horizonBars, moveThresholdPct, feeBps, slippageBps, {
+    microstructureHistory: options.microstructureHistory,
+    microstructureLookbackMs: options.microstructureLookbackMs,
+  });
   const { train, validation, test } = splitExamples(examples);
   const trainRows = train.map((example) => example.features);
   const validationRows = validation.map((example) => example.features);

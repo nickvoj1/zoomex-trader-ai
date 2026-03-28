@@ -74,7 +74,14 @@ npm run dev
 
 ## Research workflows
 
-All research scripts use one-minute OHLCV CSV input with headers like `timestamp,open,high,low,close,volume`.
+All research scripts use OHLCV CSV input with headers like `timestamp,open,high,low,close,volume`.
+The loader now sorts, de-duplicates, repairs inconsistent OHLC bounds, detects gaps, fills small missing intervals with synthetic flat candles, and emits a data-quality summary that is stored with research runs.
+
+Backfill historical futures candles from Binance:
+
+```bash
+npm run research:backfill -- --symbol BTCUSDT --interval 1m --start 2025-01-01 --end 2025-03-01
+```
 
 Parameter sweep:
 
@@ -92,6 +99,12 @@ Train logistic signal models:
 
 ```bash
 npm run research:train -- --input /absolute/path/to/btcusdt-1m.csv --side both
+```
+
+If you already have historical market snapshots in JSON, you can feed them into training too:
+
+```bash
+npm run research:train -- --input /absolute/path/to/btcusdt-1m.csv --side both --snapshots-file /absolute/path/to/market-snapshots.json
 ```
 
 Run the full research cycle in one shot:
@@ -115,6 +128,8 @@ npm run ops:daemon -- --user-id YOUR_USER_ID
 The daemon expects `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`. If `BOT_USER_ID` is also set, it will reconcile that account, call the `scalper` function on a loop, persist market snapshots, and keep a Binance liquidation stream in memory for live crowding metrics.
 
 If the daemon is running, the `scalper` function will also reuse the freshest stored liquidation metrics from `market_snapshots` so direct bot runs benefit from that crowding context.
+
+The training scripts now also pull historical `market_snapshots` from Supabase automatically when available, so the model can learn from more than candles alone.
 
 ## Manual usage
 
@@ -154,3 +169,4 @@ curl -X POST \
 - Added a one-command research cycle runner for sweep + walk-forward + training
 - Added cross-venue microstructure gating to the live strategy path
 - Added live model-artifact confirmation/veto on top of the rule engine
+- Added dataset backfill, cleaning, gap handling, and data-quality reporting for research inputs

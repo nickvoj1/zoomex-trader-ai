@@ -3,7 +3,7 @@ import {
   csvBooleanArg,
   csvNumberArg,
   defaultStrategySettings,
-  loadCandlesFromCsv,
+  loadCandleDatasetFromCsv,
   numberArg,
   parseArgs,
   stringArg,
@@ -25,7 +25,8 @@ async function main() {
   const validationCandles = numberArg(args, "validation-candles", 2_000);
   const stepCandles = numberArg(args, "step-candles", validationCandles);
   const maxEvaluations = numberArg(args, "limit", 72);
-  const candles = await loadCandlesFromCsv(input);
+  const dataset = await loadCandleDatasetFromCsv(input);
+  const candles = dataset.candles;
   const base = defaultStrategySettings();
   const parameterSpace: ParameterSpace = {
     riskPct: csvNumberArg(args, "risk-pct", [0.25, 0.5, 0.75]),
@@ -55,6 +56,7 @@ async function main() {
   await writeJson(output, {
     createdAt: new Date().toISOString(),
     input,
+    dataQuality: dataset.quality,
     objective,
     trainingCandles,
     validationCandles,
@@ -69,12 +71,16 @@ async function main() {
     objective,
     config: {
       input,
+      dataQuality: dataset.quality,
       trainingCandles,
       validationCandles,
       stepCandles,
       maxEvaluations,
     },
-    summary: report,
+    summary: {
+      dataQuality: dataset.quality,
+      report,
+    },
     artifact_path: output,
   }).catch(() => null);
 
