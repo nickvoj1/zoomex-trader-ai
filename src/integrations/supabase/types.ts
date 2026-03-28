@@ -14,7 +14,162 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      api_keys: {
+        Row: {
+          coincodex_key: string | null
+          created_at: string
+          id: string
+          openai_key: string | null
+          telegram_token: string | null
+          updated_at: string
+          user_id: string
+          zoomex_key: string | null
+          zoomex_secret: string | null
+        }
+        Insert: {
+          coincodex_key?: string | null
+          created_at?: string
+          id?: string
+          openai_key?: string | null
+          telegram_token?: string | null
+          updated_at?: string
+          user_id: string
+          zoomex_key?: string | null
+          zoomex_secret?: string | null
+        }
+        Update: {
+          coincodex_key?: string | null
+          created_at?: string
+          id?: string
+          openai_key?: string | null
+          telegram_token?: string | null
+          updated_at?: string
+          user_id?: string
+          zoomex_key?: string | null
+          zoomex_secret?: string | null
+        }
+        Relationships: []
+      }
+      profiles: {
+        Row: {
+          auto_trade: boolean
+          created_at: string
+          email: string | null
+          id: string
+          leverage: number
+          max_risk_pct: number
+          telegram_id: string | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          auto_trade?: boolean
+          created_at?: string
+          email?: string | null
+          id?: string
+          leverage?: number
+          max_risk_pct?: number
+          telegram_id?: string | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          auto_trade?: boolean
+          created_at?: string
+          email?: string | null
+          id?: string
+          leverage?: number
+          max_risk_pct?: number
+          telegram_id?: string | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      signals: {
+        Row: {
+          ai_reasoning: string | null
+          created_at: string
+          id: string
+          price: number | null
+          rsi: number | null
+          signal: Database["public"]["Enums"]["signal_type"]
+          symbol: string
+          user_id: string
+        }
+        Insert: {
+          ai_reasoning?: string | null
+          created_at?: string
+          id?: string
+          price?: number | null
+          rsi?: number | null
+          signal?: Database["public"]["Enums"]["signal_type"]
+          symbol?: string
+          user_id: string
+        }
+        Update: {
+          ai_reasoning?: string | null
+          created_at?: string
+          id?: string
+          price?: number | null
+          rsi?: number | null
+          signal?: Database["public"]["Enums"]["signal_type"]
+          symbol?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      trades: {
+        Row: {
+          closed_at: string | null
+          created_at: string
+          entry_price: number
+          exit_price: number | null
+          id: string
+          leverage: number
+          pnl: number | null
+          side: string
+          size: number
+          sl: number | null
+          status: Database["public"]["Enums"]["trade_status"]
+          symbol: string
+          tp: number | null
+          user_id: string
+        }
+        Insert: {
+          closed_at?: string | null
+          created_at?: string
+          entry_price: number
+          exit_price?: number | null
+          id?: string
+          leverage?: number
+          pnl?: number | null
+          side: string
+          size: number
+          sl?: number | null
+          status?: Database["public"]["Enums"]["trade_status"]
+          symbol?: string
+          tp?: number | null
+          user_id: string
+        }
+        Update: {
+          closed_at?: string | null
+          created_at?: string
+          entry_price?: number
+          exit_price?: number | null
+          id?: string
+          leverage?: number
+          pnl?: number | null
+          side?: string
+          size?: number
+          sl?: number | null
+          status?: Database["public"]["Enums"]["trade_status"]
+          symbol?: string
+          tp?: number | null
+          user_id?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
@@ -23,7 +178,8 @@ export type Database = {
       [_ in never]: never
     }
     Enums: {
-      [_ in never]: never
+      signal_type: "buy" | "sell" | "hold"
+      trade_status: "open" | "closed"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -150,6 +306,9 @@ export type CompositeTypes<
 
 export const Constants = {
   public: {
-    Enums: {},
+    Enums: {
+      signal_type: ["buy", "sell", "hold"],
+      trade_status: ["open", "closed"],
+    },
   },
 } as const
