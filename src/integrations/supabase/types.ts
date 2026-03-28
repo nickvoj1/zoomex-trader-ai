@@ -54,6 +54,7 @@ export type Database = {
         Row: {
           auto_trade: boolean
           created_at: string
+          demo_mode: boolean
           email: string | null
           id: string
           leverage: number
@@ -65,6 +66,7 @@ export type Database = {
         Insert: {
           auto_trade?: boolean
           created_at?: string
+          demo_mode?: boolean
           email?: string | null
           id?: string
           leverage?: number
@@ -76,6 +78,7 @@ export type Database = {
         Update: {
           auto_trade?: boolean
           created_at?: string
+          demo_mode?: boolean
           email?: string | null
           id?: string
           leverage?: number

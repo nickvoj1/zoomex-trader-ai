@@ -1,0 +1,1 @@
+ALTER TABLE public.profiles ADD COLUMN demo_mode boolean NOT NULL DEFAULT true;

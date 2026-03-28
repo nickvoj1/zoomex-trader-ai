@@ -6,7 +6,8 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
-const MEXC_FUTURES = "https://contract.mexc.com";
+const MEXC_FUTURES_LIVE = "https://contract.mexc.com";
+const MEXC_FUTURES_DEMO = "https://contract.testnet.mexc.com";
 
 // ── HMAC-SHA256 ─────────────────────────────────────────────────────
 
@@ -22,15 +23,15 @@ async function hmacSHA256(secret: string, message: string): Promise<string> {
 
 // ── MEXC Futures API helpers ────────────────────────────────────────
 
-async function mexcFuturesGet(path: string, params: Record<string, string> = {}) {
+async function mexcFuturesGet(baseUrl: string, path: string, params: Record<string, string> = {}) {
   const qs = new URLSearchParams(params).toString();
-  const url = `${MEXC_FUTURES}${path}${qs ? "?" + qs : ""}`;
+  const url = `${baseUrl}${path}${qs ? "?" + qs : ""}`;
   const res = await fetch(url);
   return res.json();
 }
 
 async function mexcFuturesPrivate(
-  apiKey: string, apiSecret: string,
+  baseUrl: string, apiKey: string, apiSecret: string,
   method: string, path: string,
   params: Record<string, string> = {}
 ) {
@@ -39,7 +40,7 @@ async function mexcFuturesPrivate(
   const paramStr = Object.keys(params).sort().map(k => `${k}=${params[k]}`).join("&");
   const signature = await hmacSHA256(apiSecret, paramStr);
 
-  const url = `${MEXC_FUTURES}${path}`;
+  const url = `${baseUrl}${path}`;
   const body = paramStr + "&signature=" + signature;
 
   const res = await fetch(url, {
@@ -53,16 +54,16 @@ async function mexcFuturesPrivate(
   return res.json();
 }
 
-async function getAccountAssets(apiKey: string, apiSecret: string) {
-  return mexcFuturesPrivate(apiKey, apiSecret, "GET", "/api/v1/private/account/assets");
+async function getAccountAssets(baseUrl: string, apiKey: string, apiSecret: string) {
+  return mexcFuturesPrivate(baseUrl, apiKey, apiSecret, "GET", "/api/v1/private/account/assets");
 }
 
-async function getOpenPositions(apiKey: string, apiSecret: string, symbol: string) {
-  return mexcFuturesPrivate(apiKey, apiSecret, "GET", "/api/v1/private/position/open_positions", { symbol });
+async function getOpenPositions(baseUrl: string, apiKey: string, apiSecret: string, symbol: string) {
+  return mexcFuturesPrivate(baseUrl, apiKey, apiSecret, "GET", "/api/v1/private/position/open_positions", { symbol });
 }
 
 async function submitOrder(
-  apiKey: string, apiSecret: string,
+  baseUrl: string, apiKey: string, apiSecret: string,
   params: {
     symbol: string; price: string; vol: string;
     side: string; type: string; openType: string;
@@ -71,7 +72,7 @@ async function submitOrder(
   }
 ) {
   const orderParams: Record<string, string> = { ...params };
-  return mexcFuturesPrivate(apiKey, apiSecret, "POST", "/api/v1/private/order/submit", orderParams);
+  return mexcFuturesPrivate(baseUrl, apiKey, apiSecret, "POST", "/api/v1/private/order/submit", orderParams);
 }
 
 // ── Technical Indicators ────────────────────────────────────────────
@@ -113,11 +114,11 @@ function detectVolumeSpike(volumes: number[], threshold = 2.0): boolean {
 
 // ── Fetch MEXC Futures klines ───────────────────────────────────────
 
-async function fetchFuturesOHLCV(): Promise<{
+async function fetchFuturesOHLCV(baseUrl: string): Promise<{
   closes: number[]; volumes: number[]; currentPrice: number;
   candles: Array<{ open: number; high: number; low: number; close: number; vol: number }>;
 }> {
-  const data = await mexcFuturesGet("/api/v1/contract/kline/BTC_USDT", {
+  const data = await mexcFuturesGet(baseUrl, "/api/v1/contract/kline/BTC_USDT", {
     interval: "Min1",
     limit: "50",
   });
@@ -246,7 +247,7 @@ Deno.serve(async (req) => {
     // Get users with auto_trade enabled (or specific user for manual trade)
     let profilesQuery = supabaseAdmin
       .from("profiles")
-      .select("user_id, auto_trade, max_risk_pct, leverage, telegram_id");
+      .select("user_id, auto_trade, max_risk_pct, leverage, telegram_id, demo_mode");
 
     if (manualUserId) {
       profilesQuery = profilesQuery.eq("user_id", manualUserId);
@@ -263,7 +264,8 @@ Deno.serve(async (req) => {
     }
 
     // Fetch market data once
-    const { closes, volumes, currentPrice, candles } = await fetchFuturesOHLCV();
+    // Fetch market data once (use live for klines — testnet may not have full data)
+    const { closes, volumes, currentPrice, candles } = await fetchFuturesOHLCV(MEXC_FUTURES_LIVE);
     const rsi = calculateRSI(closes);
     const ema9 = calculateEMA(closes, 9);
     const ema21 = calculateEMA(closes, 21);
@@ -276,7 +278,9 @@ Deno.serve(async (req) => {
     const results: Array<{ userId: string; action: string; detail?: string }> = [];
 
     for (const profile of profiles) {
-      const { user_id, max_risk_pct, leverage, telegram_id } = profile;
+      const { user_id, max_risk_pct, leverage, telegram_id, demo_mode } = profile as any;
+      const baseUrl = demo_mode ? MEXC_FUTURES_DEMO : MEXC_FUTURES_LIVE;
+      console.log(`User ${user_id}: ${demo_mode ? "DEMO" : "LIVE"} mode`);
 
       const { data: keys } = await supabaseAdmin
         .from("api_keys")
@@ -290,7 +294,7 @@ Deno.serve(async (req) => {
       }
 
       // Check open positions
-      const posData = await getOpenPositions(keys.mexc_key, keys.mexc_secret, "BTC_USDT");
+      const posData = await getOpenPositions(baseUrl, keys.mexc_key, keys.mexc_secret, "BTC_USDT");
       const positions = posData?.data || [];
       const hasPosition = Array.isArray(positions) && positions.length > 0;
       const positionSide = hasPosition ? (positions[0].positionType === 1 ? "long" : "short") : null;
@@ -354,7 +358,7 @@ Deno.serve(async (req) => {
         }
 
         // Get account balance for dynamic sizing
-        const assets = await getAccountAssets(keys.mexc_key, keys.mexc_secret);
+        const assets = await getAccountAssets(baseUrl, keys.mexc_key, keys.mexc_secret);
         const usdtBalance = assets?.data?.find?.((a: any) => a.currency === "USDT");
         const availableBalance = Number(usdtBalance?.availableBalance || 0);
 
@@ -379,7 +383,7 @@ Deno.serve(async (req) => {
         // side: 1=open long, 3=open short
         const side = isLong ? "1" : "3";
 
-        const orderRes = await submitOrder(keys.mexc_key, keys.mexc_secret, {
+        const orderRes = await submitOrder(baseUrl, keys.mexc_key, keys.mexc_secret, {
           symbol: "BTC_USDT",
           price: currentPrice.toString(),
           vol: contracts.toString(),
@@ -420,7 +424,7 @@ Deno.serve(async (req) => {
         const closeSide = positionSide === "long" ? "4" : "2";
         const posVol = positions[0].holdVol?.toString() || "1";
 
-        const orderRes = await submitOrder(keys.mexc_key, keys.mexc_secret, {
+        const orderRes = await submitOrder(baseUrl, keys.mexc_key, keys.mexc_secret, {
           symbol: "BTC_USDT",
           price: currentPrice.toString(),
           vol: posVol,

@@ -28,6 +28,7 @@ export default function SettingsPage() {
     max_risk_pct: 0.5,
     leverage: 10,
     telegram_id: "",
+    demo_mode: true,
   });
 
   useEffect(() => {
@@ -60,6 +61,7 @@ export default function SettingsPage() {
           max_risk_pct: Number(profData.max_risk_pct),
           leverage: profData.leverage,
           telegram_id: profData.telegram_id || "",
+          demo_mode: (profData as any).demo_mode ?? true,
         });
       }
     };
@@ -87,7 +89,8 @@ export default function SettingsPage() {
         max_risk_pct: profile.max_risk_pct,
         leverage: profile.leverage,
         telegram_id: profile.telegram_id || null,
-      })
+        demo_mode: profile.demo_mode,
+      } as any)
       .eq("user_id", user.id);
     setSaving(false);
     if (error) toast.error(error.message);
@@ -149,6 +152,17 @@ export default function SettingsPage() {
           <CardDescription>Auto-scalping parameters</CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <Label>Demo Mode (Testnet)</Label>
+              <p className="text-xs text-muted-foreground">Trade on MEXC testnet with virtual funds</p>
+            </div>
+            <Switch
+              checked={profile.demo_mode}
+              onCheckedChange={(val) => setProfile({ ...profile, demo_mode: val })}
+            />
+          </div>
+
           <div className="flex items-center justify-between">
             <div>
               <Label>Auto-Trade</Label>
