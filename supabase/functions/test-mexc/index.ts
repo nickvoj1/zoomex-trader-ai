@@ -22,35 +22,27 @@ Deno.serve(async (req) => {
 
     const supabaseAdmin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
 
-    const { data: keys } = await supabaseAdmin.from("api_keys").select("zoomex_key, zoomex_secret").eq("user_id", user_id).maybeSingle();
+    const { data: keys } = await supabaseAdmin.from("api_keys").select("mexc_key, mexc_secret").eq("user_id", user_id).maybeSingle();
 
-    if (!keys?.zoomex_key || !keys?.zoomex_secret) {
-      return new Response(JSON.stringify({ success: false, error: "No Zoomex API keys found" }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    if (!keys?.mexc_key || !keys?.mexc_secret) {
+      return new Response(JSON.stringify({ success: false, error: "No MEXC API keys found" }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
-    // Test: get wallet balance
     const timestamp = Date.now().toString();
-    const recvWindow = "5000";
-    const params = "accountType=UNIFIED";
-    const preSign = `${timestamp}${keys.zoomex_key}${recvWindow}${params}`;
-    const signature = await hmacSHA256(keys.zoomex_secret, preSign);
+    const params = `timestamp=${timestamp}&recvWindow=5000`;
+    const signature = await hmacSHA256(keys.mexc_secret, params);
 
-    const res = await fetch(`https://openapi.zoomex.com/cloud/trade/v3/account/wallet-balance?${params}`, {
-      headers: {
-        "X-BAPI-API-KEY": keys.zoomex_key,
-        "X-BAPI-SIGN": signature,
-        "X-BAPI-TIMESTAMP": timestamp,
-        "X-BAPI-RECV-WINDOW": recvWindow,
-      },
+    const res = await fetch(`https://api.mexc.com/api/v3/account?${params}&signature=${signature}`, {
+      headers: { "X-MEXC-APIKEY": keys.mexc_key },
     });
     const data = await res.json();
 
-    const success = data.retCode === 0;
+    const success = !data.code;
     return new Response(JSON.stringify({
       success,
-      retCode: data.retCode,
-      retMsg: data.retMsg,
-      balance: success ? data.result?.list?.[0]?.totalEquity : null,
+      code: data.code,
+      msg: data.msg,
+      balances: success ? (data.balances || []).filter((b: any) => parseFloat(b.free) > 0 || parseFloat(b.locked) > 0).slice(0, 10) : null,
     }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
   } catch (err) {
     return new Response(JSON.stringify({ success: false, error: String(err) }), { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });

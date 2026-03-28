@@ -78,7 +78,7 @@ export default function Dashboard() {
   }, [user]);
 
   const handleTrade = (side: "buy" | "sell") => {
-    // In production, this calls the Zoomex edge function
+    // In production, this calls the MEXC edge function
     console.log(`Quick trade: ${side} 0.001 BTC`);
   };
 

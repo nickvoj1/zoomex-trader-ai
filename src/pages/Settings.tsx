@@ -16,8 +16,8 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false);
 
   const [keys, setKeys] = useState({
-    zoomex_key: "",
-    zoomex_secret: "",
+    mexc_key: "",
+    mexc_secret: "",
     coincodex_key: "",
     openai_key: "",
     telegram_token: "",
@@ -41,8 +41,8 @@ export default function SettingsPage() {
         .maybeSingle();
       if (keyData) {
         setKeys({
-          zoomex_key: keyData.zoomex_key || "",
-          zoomex_secret: keyData.zoomex_secret || "",
+          mexc_key: keyData.mexc_key || "",
+          mexc_secret: keyData.mexc_secret || "",
           coincodex_key: keyData.coincodex_key || "",
           openai_key: keyData.openai_key || "",
           telegram_token: keyData.telegram_token || "",
@@ -118,8 +118,8 @@ export default function SettingsPage() {
         </CardHeader>
         <CardContent className="space-y-4">
           {[
-            { key: "zoomex_key", label: "Zoomex API Key" },
-            { key: "zoomex_secret", label: "Zoomex Secret" },
+            { key: "mexc_key", label: "MEXC API Key" },
+            { key: "mexc_secret", label: "MEXC Secret" },
             { key: "coincodex_key", label: "CoinCodex API Key" },
             { key: "openai_key", label: "OpenAI API Key" },
             { key: "telegram_token", label: "Telegram Bot Token" },
