@@ -1,4 +1,4 @@
-export const MEXC_REST_BASE_URL = "https://api.mexc.com";
+export const MEXC_REST_BASE_URL = "https://contract.mexc.com";
 export const MEXC_WS_URL = "wss://contract.mexc.com/edge";
 
 export interface MexcApiResponse<T = unknown> {
@@ -14,6 +14,10 @@ export interface MexcAsset {
   availableBalance?: number | string;
   frozenBalance?: number | string;
   positionMargin?: number | string;
+  cashBalance?: number | string;
+  equity?: number | string;
+  unrealized?: number | string;
+  bonus?: number | string;
 }
 
 export interface MexcPosition {

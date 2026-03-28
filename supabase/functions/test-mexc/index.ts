@@ -5,6 +5,10 @@ interface ProfileRecord {
   demo_mode: boolean;
 }
 
+function toNumber(value: number | string | null | undefined) {
+  return Number(value ?? 0);
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -47,9 +51,15 @@ Deno.serve(async (req) => {
     const success = assetResponse.success === true || assetResponse.code === 0;
     const assets = success
       ? ((assetResponse.data ?? []) as MexcAsset[])
-        .filter((asset) => Number(asset.availableBalance ?? 0) > 0 || Number(asset.frozenBalance ?? 0) > 0)
-        .slice(0, 10)
+        .filter((asset) =>
+          toNumber(asset.availableBalance) > 0 ||
+          toNumber(asset.frozenBalance) > 0 ||
+          toNumber(asset.positionMargin) > 0 ||
+          toNumber(asset.equity) > 0 ||
+          toNumber(asset.unrealized) !== 0
+        )
       : [];
+    const primaryAsset = assets.find((asset) => asset.currency === "USDT") ?? assets[0] ?? null;
 
     return jsonResponse({
       success,
@@ -57,6 +67,18 @@ Deno.serve(async (req) => {
       code: assetResponse.code,
       msg: assetResponse.msg ?? assetResponse.message ?? null,
       assets,
+      balance_summary: primaryAsset
+        ? {
+          currency: primaryAsset.currency,
+          available: toNumber(primaryAsset.availableBalance),
+          frozen: toNumber(primaryAsset.frozenBalance),
+          positionMargin: toNumber(primaryAsset.positionMargin),
+          cashBalance: toNumber(primaryAsset.cashBalance),
+          equity: toNumber(primaryAsset.equity),
+          unrealized: toNumber(primaryAsset.unrealized),
+          bonus: toNumber(primaryAsset.bonus),
+        }
+        : null,
       openai_configured: Boolean(keyRow.openai_key),
     });
   } catch (error) {

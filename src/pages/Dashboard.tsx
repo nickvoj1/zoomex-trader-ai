@@ -12,7 +12,7 @@ import { TradeHistoryTable } from "@/components/dashboard/TradeHistoryTable";
 import { toast } from "sonner";
 
 const PAPER_STARTING_BALANCE = 10_000;
-const MEXC_KLINE_URL = "https://api.mexc.com/api/v1/contract/kline/BTC_USDT?interval=Min1&limit=60";
+const MEXC_KLINE_URL = "https://contract.mexc.com/api/v1/contract/kline/BTC_USDT?interval=Min1&limit=60";
 
 type SignalRow = Tables<"signals">;
 type TradeRow = Tables<"trades">;
@@ -36,12 +36,28 @@ interface ConnectionAsset {
   availableBalance?: number | string;
   frozenBalance?: number | string;
   positionMargin?: number | string;
+  cashBalance?: number | string;
+  equity?: number | string;
+  unrealized?: number | string;
+  bonus?: number | string;
+}
+
+interface BalanceSummary {
+  currency: string;
+  available: number;
+  frozen: number;
+  positionMargin: number;
+  cashBalance: number;
+  equity: number;
+  unrealized: number;
+  bonus: number;
 }
 
 interface ConnectionTestResult {
   success: boolean;
   mode: "paper" | "live";
   assets?: ConnectionAsset[];
+  balance_summary?: BalanceSummary | null;
   msg?: string | null;
   error?: string;
 }
@@ -51,6 +67,7 @@ interface BalanceSnapshot {
   available: number;
   locked: number;
   total: number;
+  unrealized: number;
   updatedAt: string;
 }
 
@@ -169,20 +186,32 @@ function formatBalance(value: number, currency: string) {
   return currency === "USDT" ? `$${value.toFixed(2)}` : `${value.toFixed(4)} ${currency}`;
 }
 
-function deriveBalanceSnapshot(assets: ConnectionAsset[] | undefined): BalanceSnapshot | null {
-  if (!assets || assets.length === 0) return null;
+function deriveBalanceSnapshot(result: ConnectionTestResult): BalanceSnapshot | null {
+  const summary = result.balance_summary;
+  if (summary) {
+    return {
+      currency: summary.currency,
+      available: summary.available,
+      locked: summary.frozen + summary.positionMargin,
+      total: summary.equity > 0 ? summary.equity : summary.available + summary.frozen + summary.positionMargin,
+      unrealized: summary.unrealized,
+      updatedAt: new Date().toISOString(),
+    };
+  }
 
-  const asset = assets.find((entry) => entry.currency === "USDT") ?? assets[0];
+  const asset = result.assets?.find((entry) => entry.currency === "USDT") ?? result.assets?.[0];
   if (!asset) return null;
 
   const available = toNumber(asset.availableBalance);
   const locked = toNumber(asset.frozenBalance) + toNumber(asset.positionMargin);
+  const equity = toNumber(asset.equity);
 
   return {
     currency: asset.currency,
     available,
     locked,
-    total: available + locked,
+    total: equity > 0 ? equity : available + locked,
+    unrealized: toNumber(asset.unrealized),
     updatedAt: new Date().toISOString(),
   };
 }
@@ -346,7 +375,7 @@ export default function Dashboard() {
           return;
         }
 
-        setBalanceSnapshot(deriveBalanceSnapshot(result.assets));
+        setBalanceSnapshot(deriveBalanceSnapshot(result));
         setIsDemoMode(result.mode === "paper");
         setBalanceError(null);
       } catch (error) {
@@ -447,7 +476,7 @@ export default function Dashboard() {
       ? `Paper mode · MEXC ${formatBalance(balanceSnapshot.total, balanceSnapshot.currency)}`
       : "Paper mode simulated from trade history"
     : balanceSnapshot
-      ? `Available ${formatBalance(balanceSnapshot.available, balanceSnapshot.currency)} · Locked ${formatBalance(balanceSnapshot.locked, balanceSnapshot.currency)}`
+      ? `Available ${formatBalance(balanceSnapshot.available, balanceSnapshot.currency)} · Locked ${formatBalance(balanceSnapshot.locked, balanceSnapshot.currency)} · Unrealized ${formatBalance(balanceSnapshot.unrealized, balanceSnapshot.currency)}`
       : balanceError || "Fetching exchange balance";
   const accountPositive = isDemoMode ? paperBalance >= PAPER_STARTING_BALANCE : Boolean(balanceSnapshot && balanceSnapshot.total > 0);
 
@@ -479,7 +508,7 @@ export default function Dashboard() {
           </div>
           <p className="mt-2 text-xs text-muted-foreground">
             {balanceSnapshot
-              ? `Available ${formatBalance(balanceSnapshot.available, balanceSnapshot.currency)} · Locked ${formatBalance(balanceSnapshot.locked, balanceSnapshot.currency)}`
+              ? `Available ${formatBalance(balanceSnapshot.available, balanceSnapshot.currency)} · Locked ${formatBalance(balanceSnapshot.locked, balanceSnapshot.currency)} · Unrealized ${formatBalance(balanceSnapshot.unrealized, balanceSnapshot.currency)}`
               : balanceError || (isDemoMode ? "Paper equity updates from closed trades." : "Connect MEXC keys to load your balance.")}
           </p>
           {balanceSnapshot ? (
