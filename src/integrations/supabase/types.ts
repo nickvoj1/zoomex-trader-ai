@@ -52,37 +52,52 @@ export type Database = {
       }
       profiles: {
         Row: {
+          allow_mean_reversion_trades: boolean
+          allow_trend_trades: boolean
           auto_trade: boolean
           created_at: string
+          daily_loss_limit_pct: number
           demo_mode: boolean
           email: string | null
           id: string
           leverage: number
+          max_consecutive_losses: number
           max_risk_pct: number
+          min_confidence: number
           telegram_id: string | null
           updated_at: string
           user_id: string
         }
         Insert: {
+          allow_mean_reversion_trades?: boolean
+          allow_trend_trades?: boolean
           auto_trade?: boolean
           created_at?: string
+          daily_loss_limit_pct?: number
           demo_mode?: boolean
           email?: string | null
           id?: string
           leverage?: number
+          max_consecutive_losses?: number
           max_risk_pct?: number
+          min_confidence?: number
           telegram_id?: string | null
           updated_at?: string
           user_id: string
         }
         Update: {
+          allow_mean_reversion_trades?: boolean
+          allow_trend_trades?: boolean
           auto_trade?: boolean
           created_at?: string
+          daily_loss_limit_pct?: number
           demo_mode?: boolean
           email?: string | null
           id?: string
           leverage?: number
+          max_consecutive_losses?: number
           max_risk_pct?: number
+          min_confidence?: number
           telegram_id?: string | null
           updated_at?: string
           user_id?: string
@@ -135,49 +150,58 @@ export type Database = {
         Row: {
           closed_at: string | null
           created_at: string
+          entry_confidence: number | null
           entry_price: number
           exit_price: number | null
           id: string
           leverage: number
           pnl: number | null
+          setup_type: string | null
           side: string
           size: number
           sl: number | null
           status: Database["public"]["Enums"]["trade_status"]
           symbol: string
           tp: number | null
+          trade_metadata: Json | null
           user_id: string
         }
         Insert: {
           closed_at?: string | null
           created_at?: string
+          entry_confidence?: number | null
           entry_price: number
           exit_price?: number | null
           id?: string
           leverage?: number
           pnl?: number | null
+          setup_type?: string | null
           side: string
           size: number
           sl?: number | null
           status?: Database["public"]["Enums"]["trade_status"]
           symbol?: string
           tp?: number | null
+          trade_metadata?: Json | null
           user_id: string
         }
         Update: {
           closed_at?: string | null
           created_at?: string
+          entry_confidence?: number | null
           entry_price?: number
           exit_price?: number | null
           id?: string
           leverage?: number
           pnl?: number | null
+          setup_type?: string | null
           side?: string
           size?: number
           sl?: number | null
           status?: Database["public"]["Enums"]["trade_status"]
           symbol?: string
           tp?: number | null
+          trade_metadata?: Json | null
           user_id?: string
         }
         Relationships: []
