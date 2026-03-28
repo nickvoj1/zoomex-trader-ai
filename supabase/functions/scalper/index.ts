@@ -294,7 +294,7 @@ Deno.serve(async (req) => {
       }
 
       // Check open positions
-      const posData = await getOpenPositions(keys.mexc_key, keys.mexc_secret, "BTC_USDT");
+      const posData = await getOpenPositions(baseUrl, keys.mexc_key, keys.mexc_secret, "BTC_USDT");
       const positions = posData?.data || [];
       const hasPosition = Array.isArray(positions) && positions.length > 0;
       const positionSide = hasPosition ? (positions[0].positionType === 1 ? "long" : "short") : null;
