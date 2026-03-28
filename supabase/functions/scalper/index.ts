@@ -17,13 +17,13 @@ import {
   StrategySetup,
   toStopAndTakeProfit,
   TradeAction,
-} from "../../../src/lib/strategy-core.ts";
-import { fetchCrossVenueSnapshot } from "../../../src/lib/market-intel.ts";
+} from "../_shared/strategy-core.ts";
+import { fetchCrossVenueSnapshot } from "../_shared/market-intel.ts";
 import {
   extractFeatureMap,
   LogisticModelArtifact,
   predictLogisticProbability,
-} from "../../../src/lib/quant-research.ts";
+} from "../_shared/quant-research.ts";
 
 const LOOP_DURATION_MS = 50_000;
 const PAPER_STARTING_BALANCE = 10_000;
