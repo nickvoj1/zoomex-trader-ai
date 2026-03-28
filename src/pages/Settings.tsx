@@ -89,7 +89,8 @@ export default function SettingsPage() {
         max_risk_pct: profile.max_risk_pct,
         leverage: profile.leverage,
         telegram_id: profile.telegram_id || null,
-      })
+        demo_mode: profile.demo_mode,
+      } as any)
       .eq("user_id", user.id);
     setSaving(false);
     if (error) toast.error(error.message);
