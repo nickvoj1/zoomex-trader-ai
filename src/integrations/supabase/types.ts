@@ -92,31 +92,40 @@ export type Database = {
       signals: {
         Row: {
           ai_reasoning: string | null
+          confidence: number | null
           created_at: string
+          decision_source: string | null
           id: string
           price: number | null
           rsi: number | null
           signal: Database["public"]["Enums"]["signal_type"]
+          signal_context: Json | null
           symbol: string
           user_id: string
         }
         Insert: {
           ai_reasoning?: string | null
+          confidence?: number | null
           created_at?: string
+          decision_source?: string | null
           id?: string
           price?: number | null
           rsi?: number | null
           signal?: Database["public"]["Enums"]["signal_type"]
+          signal_context?: Json | null
           symbol?: string
           user_id: string
         }
         Update: {
           ai_reasoning?: string | null
+          confidence?: number | null
           created_at?: string
+          decision_source?: string | null
           id?: string
           price?: number | null
           rsi?: number | null
           signal?: Database["public"]["Enums"]["signal_type"]
+          signal_context?: Json | null
           symbol?: string
           user_id?: string
         }

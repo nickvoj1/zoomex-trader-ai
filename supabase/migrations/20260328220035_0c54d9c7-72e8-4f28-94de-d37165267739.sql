@@ -1,0 +1,4 @@
+ALTER TABLE public.signals
+ADD COLUMN IF NOT EXISTS confidence NUMERIC,
+ADD COLUMN IF NOT EXISTS decision_source TEXT,
+ADD COLUMN IF NOT EXISTS signal_context JSONB;
