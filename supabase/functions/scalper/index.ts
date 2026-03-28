@@ -278,7 +278,9 @@ Deno.serve(async (req) => {
     const results: Array<{ userId: string; action: string; detail?: string }> = [];
 
     for (const profile of profiles) {
-      const { user_id, max_risk_pct, leverage, telegram_id } = profile;
+      const { user_id, max_risk_pct, leverage, telegram_id, demo_mode } = profile as any;
+      const baseUrl = demo_mode ? MEXC_FUTURES_DEMO : MEXC_FUTURES_LIVE;
+      console.log(`User ${user_id}: ${demo_mode ? "DEMO" : "LIVE"} mode`);
 
       const { data: keys } = await supabaseAdmin
         .from("api_keys")
