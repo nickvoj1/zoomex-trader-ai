@@ -154,6 +154,17 @@ export default function SettingsPage() {
         <CardContent className="space-y-6">
           <div className="flex items-center justify-between">
             <div>
+              <Label>Demo Mode (Testnet)</Label>
+              <p className="text-xs text-muted-foreground">Trade on MEXC testnet with virtual funds</p>
+            </div>
+            <Switch
+              checked={profile.demo_mode}
+              onCheckedChange={(val) => setProfile({ ...profile, demo_mode: val })}
+            />
+          </div>
+
+          <div className="flex items-center justify-between">
+            <div>
               <Label>Auto-Trade</Label>
               <p className="text-xs text-muted-foreground">Enable automated scalping</p>
             </div>
