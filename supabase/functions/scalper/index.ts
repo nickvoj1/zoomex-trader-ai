@@ -100,6 +100,50 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
 }
 
+function numberFeature(features: StrategyDecision["features"], key: string, fallback = 0) {
+  const value = features[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+function buildExecutionProfile(settings: StrategySettings, decision: StrategyDecision) {
+  const qualityScore = numberFeature(decision.features, "qualityScore", decision.confidence);
+  const regimeQuality = numberFeature(decision.features, "regimeQuality", qualityScore);
+  const executionQuality = numberFeature(decision.features, "executionQuality", qualityScore);
+  const featureRiskMultiplier = numberFeature(decision.features, "riskMultiplier", clamp(qualityScore / 100, 0.35, 1));
+  const featureLeverageMultiplier = numberFeature(
+    decision.features,
+    "leverageMultiplier",
+    clamp(executionQuality / 100, 0.55, 1),
+  );
+  const activeProbability = decision.action === "long"
+    ? numberFeature(decision.features, "modelLongProbability", 0)
+    : decision.action === "short"
+      ? numberFeature(decision.features, "modelShortProbability", 0)
+      : 0;
+  const modelEdge = Math.max(numberFeature(decision.features, "modelEdge", 0), 0);
+  const riskMultiplier = clamp(featureRiskMultiplier * (0.92 + modelEdge * 0.9), 0.35, 1);
+  const leverageMultiplier = clamp(
+    featureLeverageMultiplier * (0.92 + modelEdge * 0.7 + Math.max(activeProbability - 0.5, 0) * 0.3),
+    0.55,
+    1,
+  );
+  const effectiveRiskPct = clamp(settings.riskPct * riskMultiplier, 0.1, settings.riskPct);
+  const effectiveLeverage = Math.max(1, Math.round(settings.leverage * leverageMultiplier));
+  const convictionScore = clamp(
+    qualityScore * 0.45 + regimeQuality * 0.2 + executionQuality * 0.2 + decision.confidence * 0.15,
+    0,
+    100,
+  );
+
+  return {
+    riskMultiplier: Number(riskMultiplier.toFixed(4)),
+    leverageMultiplier: Number(leverageMultiplier.toFixed(4)),
+    effectiveRiskPct: Number(effectiveRiskPct.toFixed(4)),
+    effectiveLeverage,
+    convictionScore: Number(convictionScore.toFixed(2)),
+  };
+}
+
 function startOfDayIso() {
   const now = new Date();
   now.setUTCHours(0, 0, 0, 0);
@@ -302,45 +346,78 @@ function applyModelOverlay(
   decision: StrategyDecision,
   models: { longModel: LogisticModelArtifact | null; shortModel: LogisticModelArtifact | null },
 ) {
-  if (decision.action !== "long" && decision.action !== "short") {
-    return decision;
-  }
-
-  const model = decision.action === "long" ? models.longModel : models.shortModel;
-  if (!model) {
+  if (!models.longModel && !models.shortModel) {
     return decision;
   }
 
   const { featureMap } = extractFeatureMap(candles, candles.length - 1, settings);
-  const probability = predictLogisticProbability(model, featureMap);
-  const threshold = model.threshold;
-  const delta = probability - threshold;
-  const confidenceAdjustment = clamp(delta * 120, -22, 18);
-  const featureKey = decision.action === "long" ? "modelLongProbability" : "modelShortProbability";
+  const longProbability = models.longModel ? predictLogisticProbability(models.longModel, featureMap) : null;
+  const shortProbability = models.shortModel ? predictLogisticProbability(models.shortModel, featureMap) : null;
+  const sharedFeatures = {
+    ...decision.features,
+    modelLongProbability: longProbability === null ? null : Number(longProbability.toFixed(6)),
+    modelShortProbability: shortProbability === null ? null : Number(shortProbability.toFixed(6)),
+    modelLongThreshold: models.longModel ? Number(models.longModel.threshold.toFixed(6)) : null,
+    modelShortThreshold: models.shortModel ? Number(models.shortModel.threshold.toFixed(6)) : null,
+  };
 
-  if (delta < -0.08) {
+  if (decision.action !== "long" && decision.action !== "short") {
+    return {
+      ...decision,
+      features: sharedFeatures,
+    };
+  }
+
+  const selectedModel = decision.action === "long" ? models.longModel : models.shortModel;
+  const selectedProbability = decision.action === "long" ? longProbability : shortProbability;
+  const oppositeProbability = decision.action === "long" ? shortProbability : longProbability;
+  if (!selectedModel || selectedProbability === null) {
+    return {
+      ...decision,
+      features: sharedFeatures,
+    };
+  }
+
+  const threshold = selectedModel.threshold;
+  const delta = selectedProbability - threshold;
+  const modelEdge = selectedProbability - (oppositeProbability ?? 0.5);
+  const confidenceAdjustment = clamp(delta * 110 + modelEdge * 60, -24, 18);
+  const features = {
+    ...sharedFeatures,
+    modelThreshold: Number(threshold.toFixed(6)),
+    modelEdge: Number(modelEdge.toFixed(6)),
+    modelDelta: Number(delta.toFixed(6)),
+  };
+
+  if (delta < -0.08 || modelEdge < -0.03) {
     return {
       ...decision,
       action: "hold" as TradeAction,
       confidence: clamp(decision.confidence + confidenceAdjustment, 0, 99),
-      reasoning: `${decision.reasoning} · model vetoed ${decision.action} (${(probability * 100).toFixed(1)}% < ${(threshold * 100).toFixed(1)}%)`,
-      features: {
-        ...decision.features,
-        [featureKey]: Number(probability.toFixed(6)),
-        modelThreshold: Number(threshold.toFixed(6)),
-      },
+      reasoning:
+        `${decision.reasoning} · model vetoed ${decision.action} ` +
+        `(${(selectedProbability * 100).toFixed(1)}%, edge ${(modelEdge * 100).toFixed(1)}pts)`,
+      features,
+    };
+  }
+
+  if (delta < 0.01 && modelEdge < 0.04) {
+    return {
+      ...decision,
+      action: "hold" as TradeAction,
+      confidence: clamp(decision.confidence + confidenceAdjustment, 0, 99),
+      reasoning: `${decision.reasoning} · model conviction is too weak`,
+      features,
     };
   }
 
   return {
     ...decision,
     confidence: clamp(decision.confidence + confidenceAdjustment, 0, 99),
-    reasoning: `${decision.reasoning} · model ${delta >= 0 ? "confirmed" : "tempered"} ${decision.action} (${(probability * 100).toFixed(1)}%)`,
-    features: {
-      ...decision.features,
-      [featureKey]: Number(probability.toFixed(6)),
-      modelThreshold: Number(threshold.toFixed(6)),
-    },
+    reasoning:
+      `${decision.reasoning} · model ${delta >= 0 ? "confirmed" : "tempered"} ${decision.action} ` +
+      `(${(selectedProbability * 100).toFixed(1)}%, edge ${(modelEdge * 100).toFixed(1)}pts)`,
+    features,
   };
 }
 
@@ -528,6 +605,7 @@ async function executeTrade(
   telegramId: string | null,
 ) {
   const { stopPrice, takeProfitPrice } = toStopAndTakeProfit(currentPrice, action, decision);
+  const executionProfile = buildExecutionProfile(settings, decision);
   const tradeMetadata: Record<string, unknown> = {
     initialStopPrice: stopPrice,
     initialTakeProfitPrice: takeProfitPrice,
@@ -536,6 +614,8 @@ async function executeTrade(
     stopPct: decision.stopPct,
     regime: decision.regime,
     reasoning: decision.reasoning,
+    features: decision.features,
+    executionProfile,
     execution: {
       venue: "mexc",
       mode: paperMode ? "paper" : "live",
@@ -548,7 +628,13 @@ async function executeTrade(
 
   if (paperMode) {
     const riskState = await getSessionRiskState(supabaseAdmin, userId);
-    const sizing = calculatePositionSize(riskState.currentBalance, settings.riskPct, currentPrice, stopPrice, settings.leverage);
+    const sizing = calculatePositionSize(
+      riskState.currentBalance,
+      executionProfile.effectiveRiskPct,
+      currentPrice,
+      stopPrice,
+      executionProfile.effectiveLeverage,
+    );
     if (!sizing) return "paper_insufficient_balance";
 
     const { error } = await supabaseAdmin.from("trades").insert({
@@ -559,7 +645,7 @@ async function executeTrade(
       entry_price: currentPrice,
       tp: takeProfitPrice,
       sl: stopPrice,
-      leverage: settings.leverage,
+      leverage: executionProfile.effectiveLeverage,
       status: "open",
       setup_type: decision.setupType,
       entry_confidence: decision.confidence,
@@ -572,7 +658,7 @@ async function executeTrade(
       await sendTelegramAlert(
         keys.telegram_token,
         telegramId,
-        `📝 PAPER ${action === "long" ? "🟢 LONG" : "🔴 SHORT"} *ScalpPro*\n💰 Entry: $${currentPrice.toFixed(2)}\n🎯 TP: $${takeProfitPrice.toFixed(2)}\n🛑 SL: $${stopPrice.toFixed(2)}\n📐 ${sizing.contracts} contracts (${sizing.sizeBtc.toFixed(4)} BTC) @ ${settings.leverage}x\n🧠 ${decision.reasoning}`,
+        `📝 PAPER ${action === "long" ? "🟢 LONG" : "🔴 SHORT"} *ScalpPro*\n💰 Entry: $${currentPrice.toFixed(2)}\n🎯 TP: $${takeProfitPrice.toFixed(2)}\n🛑 SL: $${stopPrice.toFixed(2)}\n📐 ${sizing.contracts} contracts (${sizing.sizeBtc.toFixed(4)} BTC) @ ${executionProfile.effectiveLeverage}x\n🎛 Risk ${executionProfile.effectiveRiskPct.toFixed(2)}% · Conviction ${executionProfile.convictionScore.toFixed(0)}\n🧠 ${decision.reasoning}`,
       );
     }
 
@@ -588,14 +674,20 @@ async function executeTrade(
   const usdtBalance = Number(assets.find((asset) => asset.currency === "USDT")?.availableBalance ?? 0);
   if (usdtBalance < MIN_BALANCE_USDT) return "insufficient_balance";
 
-  const sizing = calculatePositionSize(usdtBalance, settings.riskPct, currentPrice, stopPrice, settings.leverage);
+  const sizing = calculatePositionSize(
+    usdtBalance,
+    executionProfile.effectiveRiskPct,
+    currentPrice,
+    stopPrice,
+    executionProfile.effectiveLeverage,
+  );
   if (!sizing) return "insufficient_balance";
 
   const orderResponse = await submitOrder(keys.mexc_key, keys.mexc_secret, {
     symbol: SYMBOL,
     price: currentPrice.toFixed(2),
     vol: sizing.contracts,
-    leverage: settings.leverage,
+    leverage: executionProfile.effectiveLeverage,
     side: action === "long" ? 1 : 3,
     type: 5,
     openType: 1,
@@ -621,7 +713,7 @@ async function executeTrade(
     entry_price: currentPrice,
     tp: takeProfitPrice,
     sl: stopPrice,
-    leverage: settings.leverage,
+    leverage: executionProfile.effectiveLeverage,
     status: "open",
     setup_type: decision.setupType,
     entry_confidence: decision.confidence,
@@ -634,7 +726,7 @@ async function executeTrade(
     await sendTelegramAlert(
       keys.telegram_token,
       telegramId,
-      `${action === "long" ? "🟢 LONG" : "🔴 SHORT"} *ScalpPro*\n💰 Entry: $${currentPrice.toFixed(2)}\n🎯 TP: $${takeProfitPrice.toFixed(2)}\n🛑 SL: $${stopPrice.toFixed(2)}\n📐 ${sizing.contracts} contracts (${sizing.sizeBtc.toFixed(4)} BTC) @ ${settings.leverage}x\n🧠 ${decision.reasoning}`,
+      `${action === "long" ? "🟢 LONG" : "🔴 SHORT"} *ScalpPro*\n💰 Entry: $${currentPrice.toFixed(2)}\n🎯 TP: $${takeProfitPrice.toFixed(2)}\n🛑 SL: $${stopPrice.toFixed(2)}\n📐 ${sizing.contracts} contracts (${sizing.sizeBtc.toFixed(4)} BTC) @ ${executionProfile.effectiveLeverage}x\n🎛 Risk ${executionProfile.effectiveRiskPct.toFixed(2)}% · Conviction ${executionProfile.convictionScore.toFixed(0)}\n🧠 ${decision.reasoning}`,
     );
   }
 

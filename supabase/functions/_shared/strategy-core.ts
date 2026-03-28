@@ -18,20 +18,28 @@ export interface FrameSnapshot {
   open: number;
   ema20: number;
   ema50: number;
+  emaSpreadPct: number;
+  emaSlopePct: number;
   rsi: number;
   atr: number;
   atrPct: number;
+  realizedVolPct: number;
+  trendEfficiency: number;
   adx: number;
   vwap: number;
   bollingerUpper: number;
   bollingerLower: number;
   bollingerZ: number;
+  bollingerWidthPct: number;
   previousHigh: number;
   previousLow: number;
   momentum1Pct: number;
   momentum3Pct: number;
   momentum5Pct: number;
   rangePct: number;
+  closeLocation: number;
+  bodyToRange: number;
+  volumeRatio: number;
   volumeSpike: boolean;
   distFromVwapAtr: number;
   wickBullish: boolean;
@@ -181,6 +189,13 @@ function standardDeviation(values: number[]) {
   const mean = average(values);
   const variance = average(values.map((value) => (value - mean) ** 2));
   return Math.sqrt(variance);
+}
+
+function percentChange(current: number, previous: number) {
+  if (!Number.isFinite(current) || !Number.isFinite(previous) || previous === 0) {
+    return 0;
+  }
+  return ((current - previous) / previous) * 100;
 }
 
 function emaSeries(values: number[], period: number) {
@@ -351,6 +366,45 @@ function bollinger(values: number[], period = 20, deviation = 2) {
   return { upper, lower, zScores };
 }
 
+function realizedVolatilityPct(values: number[], lookback = 20) {
+  if (values.length < lookback + 1) return 0;
+  const start = Math.max(1, values.length - lookback);
+  const returns = values.slice(start).map((value, index) => percentChange(value, values[start + index - 1]));
+  return standardDeviation(returns);
+}
+
+function trendEfficiency(values: number[], lookback = 10) {
+  if (values.length < lookback + 1) return 0;
+  const slice = values.slice(-(lookback + 1));
+  const netChange = Math.abs(slice[slice.length - 1] - slice[0]);
+  const pathLength = slice.slice(1).reduce((sum, value, index) => sum + Math.abs(value - slice[index]), 0);
+  return pathLength === 0 ? 0 : netChange / pathLength;
+}
+
+function emaSlopePct(series: number[], lookback = 5) {
+  if (series.length < lookback + 1) return 0;
+  const latest = series[series.length - 1];
+  const baseline = series[series.length - 1 - lookback];
+  return percentChange(latest, baseline);
+}
+
+function closeLocation(candle: MarketCandle) {
+  const range = Math.max(candle.high - candle.low, 0.0000001);
+  return clamp((candle.close - candle.low) / range, 0, 1);
+}
+
+function bodyToRange(candle: MarketCandle) {
+  const range = Math.max(candle.high - candle.low, 0.0000001);
+  return clamp(Math.abs(candle.close - candle.open) / range, 0, 1.5);
+}
+
+function relativeVolume(candles: MarketCandle[], lookback = 20) {
+  if (candles.length < lookback + 1) return 1;
+  const recent = candles.slice(-(lookback + 1), -1).map((candle) => candle.volume);
+  const baseline = average(recent);
+  return baseline === 0 ? 1 : candles[candles.length - 1].volume / baseline;
+}
+
 function isBullishWick(candle: MarketCandle) {
   const bodyTop = Math.max(candle.open, candle.close);
   const bodyBottom = Math.min(candle.open, candle.close);
@@ -368,10 +422,7 @@ function isBearishWick(candle: MarketCandle) {
 }
 
 function volumeSpike(candles: MarketCandle[], threshold = 1.8) {
-  if (candles.length < 21) return false;
-  const recent = candles.slice(-21, -1).map((candle) => candle.volume);
-  const baseline = average(recent);
-  return candles[candles.length - 1].volume > baseline * threshold;
+  return relativeVolume(candles, 20) > threshold;
 }
 
 function safeDivide(numerator: number, denominator: number) {
@@ -541,27 +592,40 @@ export function frameSnapshot(candles: MarketCandle[], interval: FrameSnapshot["
   const fiveBack = candles[candles.length - 6] ?? previous;
   const latestAtr = atr[atr.length - 1] || Math.abs(latest.close - previous.close) || latest.close * 0.001;
   const currentVwap = vwap[vwap.length - 1] || latest.close;
+  const ema20Latest = ema20[ema20.length - 1] || latest.close;
+  const ema50Latest = ema50[ema50.length - 1] || latest.close;
+  const upperBand = bands.upper[bands.upper.length - 1] || latest.close;
+  const lowerBand = bands.lower[bands.lower.length - 1] || latest.close;
+  const volumeRatio = relativeVolume(candles, 20);
 
   return {
     interval,
     close: latest.close,
     open: latest.open,
-    ema20: ema20[ema20.length - 1] || latest.close,
-    ema50: ema50[ema50.length - 1] || latest.close,
+    ema20: ema20Latest,
+    ema50: ema50Latest,
+    emaSpreadPct: percentChange(ema20Latest, ema50Latest),
+    emaSlopePct: emaSlopePct(ema20, 5),
     rsi: rsi[rsi.length - 1] || 50,
     atr: latestAtr,
     atrPct: latest.close === 0 ? 0 : latestAtr / latest.close,
+    realizedVolPct: realizedVolatilityPct(closes, 20),
+    trendEfficiency: trendEfficiency(closes, 10),
     adx: adx[adx.length - 1] || 0,
     vwap: currentVwap,
-    bollingerUpper: bands.upper[bands.upper.length - 1] || latest.close,
-    bollingerLower: bands.lower[bands.lower.length - 1] || latest.close,
+    bollingerUpper: upperBand,
+    bollingerLower: lowerBand,
     bollingerZ: bands.zScores[bands.zScores.length - 1] || 0,
+    bollingerWidthPct: latest.close === 0 ? 0 : ((upperBand - lowerBand) / latest.close) * 100,
     previousHigh: previous.high,
     previousLow: previous.low,
-    momentum1Pct: oneBack.close === 0 ? 0 : ((latest.close - oneBack.close) / oneBack.close) * 100,
-    momentum3Pct: threeBack.close === 0 ? 0 : ((latest.close - threeBack.close) / threeBack.close) * 100,
-    momentum5Pct: fiveBack.close === 0 ? 0 : ((latest.close - fiveBack.close) / fiveBack.close) * 100,
+    momentum1Pct: percentChange(latest.close, oneBack.close),
+    momentum3Pct: percentChange(latest.close, threeBack.close),
+    momentum5Pct: percentChange(latest.close, fiveBack.close),
     rangePct: latest.close === 0 ? 0 : ((latest.high - latest.low) / latest.close) * 100,
+    closeLocation: closeLocation(latest),
+    bodyToRange: bodyToRange(latest),
+    volumeRatio: volumeRatio,
     volumeSpike: volumeSpike(candles),
     distFromVwapAtr: latestAtr === 0 ? 0 : (latest.close - currentVwap) / latestAtr,
     wickBullish: isBullishWick(latest),
@@ -606,9 +670,28 @@ function detectRegime(state: MarketState): RegimeKind {
   const tf5 = state.timeframe5m;
   const tf15 = state.timeframe15m;
 
-  const trendLong = tf15.ema20 > tf15.ema50 && tf5.ema20 > tf5.ema50 && tf15.adx >= 18 && tf5.adx >= 16;
-  const trendShort = tf15.ema20 < tf15.ema50 && tf5.ema20 < tf5.ema50 && tf15.adx >= 18 && tf5.adx >= 16;
-  const range = tf15.adx < 18 && Math.abs(tf15.distFromVwapAtr) < 1.1;
+  const trendLong =
+    tf15.ema20 > tf15.ema50 &&
+    tf5.ema20 > tf5.ema50 &&
+    tf15.adx >= 18 &&
+    tf5.adx >= 16 &&
+    tf15.emaSlopePct > 0 &&
+    tf5.emaSlopePct > 0 &&
+    tf15.trendEfficiency >= 0.22;
+  const trendShort =
+    tf15.ema20 < tf15.ema50 &&
+    tf5.ema20 < tf5.ema50 &&
+    tf15.adx >= 18 &&
+    tf5.adx >= 16 &&
+    tf15.emaSlopePct < 0 &&
+    tf5.emaSlopePct < 0 &&
+    tf15.trendEfficiency >= 0.22;
+  const range =
+    tf15.adx < 18 &&
+    tf5.adx < 18 &&
+    Math.abs(tf15.distFromVwapAtr) < 1.1 &&
+    tf15.trendEfficiency < 0.4 &&
+    tf5.bollingerWidthPct < Math.max(tf15.bollingerWidthPct * 1.35, 1.2);
 
   if (trendLong) return "trend_long";
   if (trendShort) return "trend_short";
@@ -730,6 +813,155 @@ function microstructureBias(side: "long" | "short", microstructure: MarketMicros
   }
 
   return { score, reasons };
+}
+
+function directionalValue(side: "long" | "short", value: number) {
+  return side === "long" ? value : -value;
+}
+
+function expectedExecutionCostBps(settings: StrategySettings, microstructure: MarketMicrostructure | null) {
+  const spreadBps = microstructure?.primaryBook?.spreadBps ?? 0;
+  const basisPenalty = Math.abs(microstructure?.crossVenueBasisBps ?? 0) * 0.15;
+  return round(spreadBps + settings.feeBps * 2 + settings.slippageBps * 2 + basisPenalty, 4);
+}
+
+function trendRegimeQuality(side: "long" | "short", state: MarketState) {
+  const tf1 = state.timeframe1m;
+  const tf5 = state.timeframe5m;
+  const tf15 = state.timeframe15m;
+  const alignment =
+    directionalValue(side, tf1.emaSpreadPct) * 4 +
+    directionalValue(side, tf5.emaSpreadPct) * 8 +
+    directionalValue(side, tf15.emaSpreadPct) * 10 +
+    directionalValue(side, tf5.emaSlopePct) * 18 +
+    directionalValue(side, tf15.emaSlopePct) * 22;
+  const adxSupport = clamp((tf5.adx - 16) * 1.2, -10, 18) + clamp((tf15.adx - 18) * 1.2, -10, 22);
+  const efficiencySupport = tf5.trendEfficiency * 22 + tf15.trendEfficiency * 26;
+  const volatilityPenalty = clamp((tf1.realizedVolPct - tf15.realizedVolPct * 1.8) * 5.5, 0, 18);
+
+  return clamp(34 + alignment + adxSupport + efficiencySupport - volatilityPenalty, 0, 100);
+}
+
+function meanReversionRegimeQuality(side: "long" | "short", state: MarketState) {
+  const tf1 = state.timeframe1m;
+  const tf5 = state.timeframe5m;
+  const tf15 = state.timeframe15m;
+  const stretchSupport = Math.abs(tf1.distFromVwapAtr) * 10 + Math.abs(tf1.bollingerZ) * 8;
+  const calmSupport = clamp(22 - tf5.adx, 0, 18) + clamp(22 - tf15.adx, 0, 18);
+  const rejectionSupport = side === "long"
+    ? (tf1.wickBullish ? 10 : -2) + (tf1.closeLocation >= 0.55 ? 6 : -4)
+    : (tf1.wickBearish ? 10 : -2) + (tf1.closeLocation <= 0.45 ? 6 : -4);
+  const volatilityPenalty = clamp((tf1.realizedVolPct - tf5.realizedVolPct * 1.9) * 5, 0, 18);
+
+  return clamp(24 + stretchSupport + calmSupport + rejectionSupport - volatilityPenalty, 0, 100);
+}
+
+function setupQuality(side: "long" | "short", setupType: StrategySetup, state: MarketState) {
+  const tf1 = state.timeframe1m;
+  const tf5 = state.timeframe5m;
+  const desiredRsi = setupType === "trend" ? (side === "long" ? 52 : 48) : (side === "long" ? 28 : 72);
+  const rsiPenaltyDivisor = setupType === "trend" ? 1.2 : 1.4;
+  const rsiSupport = clamp(18 - Math.abs(tf1.rsi - desiredRsi) / rsiPenaltyDivisor, 0, 18);
+  const momentumSupport = clamp(
+    directionalValue(side, tf1.momentum1Pct) * 70 +
+      directionalValue(side, tf1.momentum3Pct) * 45 +
+      directionalValue(side, tf5.momentum3Pct) * 28,
+    -12,
+    24,
+  );
+  const valueZoneSupport = setupType === "trend"
+    ? clamp(16 - Math.abs(tf1.distFromVwapAtr + (side === "long" ? 0.12 : -0.12)) * 9, 0, 18)
+    : clamp(Math.abs(tf1.distFromVwapAtr) * 10 + Math.abs(tf1.bollingerZ) * 6, 0, 24);
+  const candleSupport = side === "long"
+    ? tf1.closeLocation * 8 + tf1.bodyToRange * 8 + (tf1.wickBullish ? 6 : 0)
+    : (1 - tf1.closeLocation) * 8 + tf1.bodyToRange * 8 + (tf1.wickBearish ? 6 : 0);
+  const volumeSupport = clamp((tf1.volumeRatio - 1) * 12, -4, 12);
+
+  return clamp(24 + rsiSupport + momentumSupport + valueZoneSupport + candleSupport + volumeSupport, 0, 100);
+}
+
+function executionQuality(side: "long" | "short", state: MarketState, settings: StrategySettings) {
+  const micro = state.microstructure;
+  if (!micro?.primaryBook) {
+    const lowCostFallback = clamp(80 - expectedExecutionCostBps(settings, micro) * 2.2, 25, 78);
+    return round(lowCostFallback, 2);
+  }
+
+  const imbalanceSupport =
+    directionalValue(side, micro.primaryBook.imbalance ?? 0) * 28 +
+    directionalValue(side, micro.secondaryBook?.imbalance ?? 0) * 12;
+  const takerSupport = directionalValue(side, micro.takerImbalance ?? 0) * 24;
+  const liquidationSupport = directionalValue(side, micro.liquidationBias ?? 0) * ((micro.liquidationIntensity ?? 0) + 1) * 10;
+  const spreadPenalty = clamp((micro.primaryBook.spreadBps - 1.2) * 8, 0, 34);
+  const basisPenalty = clamp(Math.max(Math.abs(micro.crossVenueBasisBps ?? 0) - 3, 0) * 0.9, 0, 18);
+  const crowdingPenalty = clamp(directionalValue(side, micro.crowdingScore ?? 0) * 2.6, 0, 20);
+
+  return clamp(62 + imbalanceSupport + takerSupport + liquidationSupport - spreadPenalty - basisPenalty - crowdingPenalty, 0, 100);
+}
+
+function enrichEntryDecision(
+  side: "long" | "short",
+  decision: StrategyDecision,
+  state: MarketState,
+  settings: StrategySettings,
+) {
+  const regimeQuality = decision.setupType === "mean_reversion"
+    ? meanReversionRegimeQuality(side, state)
+    : trendRegimeQuality(side, state);
+  const entrySetupQuality = setupQuality(side, decision.setupType, state);
+  const marketExecutionQuality = executionQuality(side, state, settings);
+  const qualityScore = round((regimeQuality + entrySetupQuality + marketExecutionQuality) / 3, 2);
+  const expectedCostBps = expectedExecutionCostBps(settings, state.microstructure);
+  const targetBps = decision.takeProfitPct * 10_000;
+  const stopBps = decision.stopPct * 10_000;
+  const edgeToCostRatio = expectedCostBps <= 0 ? 99 : targetBps / expectedCostBps;
+  const riskMultiplier = round(clamp((qualityScore - 15) / 55, 0.35, 1), 4);
+  const leverageMultiplier = round(clamp((marketExecutionQuality + regimeQuality - 60) / 75, 0.55, 1), 4);
+  const confidence = clamp(
+    decision.confidence + (qualityScore - 60) * 0.38 + (edgeToCostRatio - 2.4) * 4,
+    0,
+    98,
+  );
+  const features = {
+    ...decision.features,
+    regimeQuality: round(regimeQuality, 2),
+    setupQuality: round(entrySetupQuality, 2),
+    executionQuality: round(marketExecutionQuality, 2),
+    qualityScore,
+    expectedCostBps: round(expectedCostBps, 4),
+    targetBps: round(targetBps, 2),
+    stopBps: round(stopBps, 2),
+    edgeToCostRatio: round(edgeToCostRatio, 4),
+    riskMultiplier,
+    leverageMultiplier,
+  };
+
+  if (edgeToCostRatio < 1.85) {
+    return {
+      ...decision,
+      action: "hold" as TradeAction,
+      confidence,
+      reasoning: `${decision.reasoning} · edge after costs is too thin`,
+      features,
+    };
+  }
+
+  if (qualityScore < 54 || marketExecutionQuality < 34) {
+    return {
+      ...decision,
+      action: "hold" as TradeAction,
+      confidence,
+      reasoning: `${decision.reasoning} · setup quality is not strong enough`,
+      features,
+    };
+  }
+
+  return {
+    ...decision,
+    confidence,
+    reasoning: `${decision.reasoning} · quality ${round(qualityScore, 0)} / cost ${round(edgeToCostRatio, 1)}x`,
+    features,
+  };
 }
 
 function decisionFromScore(
@@ -970,13 +1202,24 @@ export function deriveAdvancedDecision(
     if (longScore >= 7) {
       const stopPct = clamp(tf1.atrPct * 1.15, 0.0014, 0.0075);
       const takeProfitPct = stopPct * 1.9;
-      bestDecision = decisionFromScore("long", regime, "trend", longScore, longReasons, stopPct, takeProfitPct, {
-        ...sharedMicroFeatures,
-        tf1Rsi: round(tf1.rsi, 2),
-        tf1Adx: round(tf1.adx, 2),
-        tf5Adx: round(tf5.adx, 2),
-        tf15Adx: round(tf15.adx, 2),
-      });
+      const candidate = enrichEntryDecision(
+        "long",
+        decisionFromScore("long", regime, "trend", longScore, longReasons, stopPct, takeProfitPct, {
+          ...sharedMicroFeatures,
+          tf1Rsi: round(tf1.rsi, 2),
+          tf1Adx: round(tf1.adx, 2),
+          tf5Adx: round(tf5.adx, 2),
+          tf15Adx: round(tf15.adx, 2),
+          tf1EmaSlopePct: round(tf1.emaSlopePct, 4),
+          tf5TrendEfficiency: round(tf5.trendEfficiency, 4),
+          tf15TrendEfficiency: round(tf15.trendEfficiency, 4),
+        }),
+        state,
+        settings,
+      );
+      if (candidate.action !== "hold" && candidate.confidence > bestDecision.confidence) {
+        bestDecision = candidate;
+      }
     }
 
     const shortReasons: string[] = [];
@@ -1016,16 +1259,27 @@ export function deriveAdvancedDecision(
     shortScore += shortMicro.score;
     shortReasons.push(...shortMicro.reasons);
 
-    if (shortScore >= 7 && shortScore > bestDecision.confidence / 6) {
+    if (shortScore >= 7) {
       const stopPct = clamp(tf1.atrPct * 1.15, 0.0014, 0.0075);
       const takeProfitPct = stopPct * 1.9;
-      bestDecision = decisionFromScore("short", regime, "trend", shortScore, shortReasons, stopPct, takeProfitPct, {
-        ...sharedMicroFeatures,
-        tf1Rsi: round(tf1.rsi, 2),
-        tf1Adx: round(tf1.adx, 2),
-        tf5Adx: round(tf5.adx, 2),
-        tf15Adx: round(tf15.adx, 2),
-      });
+      const candidate = enrichEntryDecision(
+        "short",
+        decisionFromScore("short", regime, "trend", shortScore, shortReasons, stopPct, takeProfitPct, {
+          ...sharedMicroFeatures,
+          tf1Rsi: round(tf1.rsi, 2),
+          tf1Adx: round(tf1.adx, 2),
+          tf5Adx: round(tf5.adx, 2),
+          tf15Adx: round(tf15.adx, 2),
+          tf1EmaSlopePct: round(tf1.emaSlopePct, 4),
+          tf5TrendEfficiency: round(tf5.trendEfficiency, 4),
+          tf15TrendEfficiency: round(tf15.trendEfficiency, 4),
+        }),
+        state,
+        settings,
+      );
+      if (candidate.action !== "hold" && candidate.confidence > bestDecision.confidence) {
+        bestDecision = candidate;
+      }
     }
   }
 
@@ -1061,14 +1315,24 @@ export function deriveAdvancedDecision(
       longReasons.push("liquidation flow supports mean reversion higher");
     }
 
-    if (longScore >= 7 && bestDecision.action === "hold") {
+    if (longScore >= 7) {
       const stopPct = clamp(tf1.atrPct * 0.95, 0.0012, 0.0055);
       const takeProfitPct = stopPct * 1.4;
-      bestDecision = decisionFromScore("long", regime, "mean_reversion", longScore, longReasons, stopPct, takeProfitPct, {
-        ...sharedMicroFeatures,
-        tf1Rsi: round(tf1.rsi, 2),
-        tf1DistFromVwapAtr: round(tf1.distFromVwapAtr, 2),
-      });
+      const candidate = enrichEntryDecision(
+        "long",
+        decisionFromScore("long", regime, "mean_reversion", longScore, longReasons, stopPct, takeProfitPct, {
+          ...sharedMicroFeatures,
+          tf1Rsi: round(tf1.rsi, 2),
+          tf1DistFromVwapAtr: round(tf1.distFromVwapAtr, 2),
+          tf1BollingerZ: round(tf1.bollingerZ, 4),
+          tf1CloseLocation: round(tf1.closeLocation, 4),
+        }),
+        state,
+        settings,
+      );
+      if (candidate.action !== "hold" && candidate.confidence > bestDecision.confidence) {
+        bestDecision = candidate;
+      }
     }
 
     const shortReasons: string[] = [];
@@ -1102,14 +1366,24 @@ export function deriveAdvancedDecision(
       shortReasons.push("liquidation flow supports mean reversion lower");
     }
 
-    if (shortScore >= 7 && bestDecision.action === "hold") {
+    if (shortScore >= 7) {
       const stopPct = clamp(tf1.atrPct * 0.95, 0.0012, 0.0055);
       const takeProfitPct = stopPct * 1.4;
-      bestDecision = decisionFromScore("short", regime, "mean_reversion", shortScore, shortReasons, stopPct, takeProfitPct, {
-        ...sharedMicroFeatures,
-        tf1Rsi: round(tf1.rsi, 2),
-        tf1DistFromVwapAtr: round(tf1.distFromVwapAtr, 2),
-      });
+      const candidate = enrichEntryDecision(
+        "short",
+        decisionFromScore("short", regime, "mean_reversion", shortScore, shortReasons, stopPct, takeProfitPct, {
+          ...sharedMicroFeatures,
+          tf1Rsi: round(tf1.rsi, 2),
+          tf1DistFromVwapAtr: round(tf1.distFromVwapAtr, 2),
+          tf1BollingerZ: round(tf1.bollingerZ, 4),
+          tf1CloseLocation: round(tf1.closeLocation, 4),
+        }),
+        state,
+        settings,
+      );
+      if (candidate.action !== "hold" && candidate.confidence > bestDecision.confidence) {
+        bestDecision = candidate;
+      }
     }
   }
 
@@ -1399,7 +1673,19 @@ export function simulateStrategy(candles: MarketCandle[], settings: StrategySett
       const rawEntryPrice = current.close;
       const entryPrice = applyEntrySlippage(rawEntryPrice, decision.action, settings.slippageBps);
       const { stopPrice, takeProfitPrice } = toStopAndTakeProfit(entryPrice, decision.action, decision);
-      const sizing = calculatePositionSize(balance, settings.riskPct, entryPrice, stopPrice, settings.leverage);
+      const riskMultiplier = clamp(
+        typeof decision.features.riskMultiplier === "number" ? decision.features.riskMultiplier : 1,
+        0.35,
+        1,
+      );
+      const leverageMultiplier = clamp(
+        typeof decision.features.leverageMultiplier === "number" ? decision.features.leverageMultiplier : 1,
+        0.55,
+        1,
+      );
+      const effectiveRiskPct = clamp(settings.riskPct * riskMultiplier, 0.1, settings.riskPct);
+      const effectiveLeverage = Math.max(1, Math.round(settings.leverage * leverageMultiplier));
+      const sizing = calculatePositionSize(balance, effectiveRiskPct, entryPrice, stopPrice, effectiveLeverage);
 
       if (sizing) {
         const entryFee = feeForExecution(entryPrice, sizing.sizeBtc, settings.feeBps);
