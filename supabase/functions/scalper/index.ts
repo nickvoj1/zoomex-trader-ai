@@ -47,7 +47,7 @@ async function zoomexRequest(
 ) {
   const timestamp = Date.now().toString();
   const recvWindow = "5000";
-  const baseUrl = "https://api.zoomex.com";
+  const baseUrl = "https://openapi.zoomex.com";
 
   let queryString = "";
   let body = "";
