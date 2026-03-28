@@ -57,7 +57,7 @@ export default function Auth() {
             <CardTitle className="text-3xl font-bold tracking-tight">ScalpPro</CardTitle>
           </div>
           <CardDescription className="text-muted-foreground">
-            Crypto scalping bot for Zoomex futures
+            Crypto scalping bot for MEXC futures
           </CardDescription>
         </CardHeader>
         <CardContent>
