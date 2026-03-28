@@ -1,14 +1,8 @@
 import { ArrowUpCircle, ArrowDownCircle, MinusCircle } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import type { Tables } from "@/integrations/supabase/types";
 
-interface Signal {
-  id: string;
-  rsi: number;
-  price: number;
-  signal: "buy" | "sell" | "hold";
-  ai_reasoning: string | null;
-  created_at: string;
-}
+type Signal = Tables<"signals">;
 
 interface SignalsFeedProps {
   signals: Signal[];
@@ -48,11 +42,21 @@ export function SignalsFeed({ signals }: SignalsFeedProps) {
                     <span className="text-xs text-muted-foreground font-mono">
                       ${sig.price?.toLocaleString()}
                     </span>
+                    {sig.confidence !== null && (
+                      <span className="text-xs text-muted-foreground font-mono">
+                        {Number(sig.confidence).toFixed(0)}%
+                      </span>
+                    )}
                   </div>
                   {sig.ai_reasoning && (
                     <p className="text-xs text-muted-foreground leading-relaxed line-clamp-2">
                       {sig.ai_reasoning}
                     </p>
+                  )}
+                  {sig.decision_source && (
+                    <span className="text-[10px] uppercase tracking-wide text-muted-foreground/60 mt-1 block">
+                      {sig.decision_source}
+                    </span>
                   )}
                   <span className="text-[10px] text-muted-foreground/60 mt-1 block">
                     {new Date(sig.created_at).toLocaleTimeString()}

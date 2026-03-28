@@ -4,63 +4,50 @@ import { Badge } from "@/components/ui/badge";
 const endpoints = [
   {
     method: "POST",
+    path: "/functions/v1/test-mexc",
+    description: "Validate saved MEXC keys for the authenticated user and return visible balances.",
+    params: ["No body required for normal user calls", "user_id: string (service-role only)"],
+  },
+  {
+    method: "POST",
     path: "/functions/v1/scalper",
-    description: "Trigger the auto-scalper. Checks RSI, places orders if conditions met.",
-    params: ["symbol (default: BTCUSDT)", "force_check: boolean"],
-  },
-  {
-    method: "POST",
-    path: "/functions/v1/place-order",
-    description: "Place a market order on Zoomex.",
-    params: ["side: buy|sell", "size: number", "leverage: number", "tp: number", "sl: number"],
-  },
-  {
-    method: "GET",
-    path: "/functions/v1/signals",
-    description: "Get latest signals with AI analysis.",
-    params: ["limit: number (default: 20)"],
-  },
-  {
-    method: "POST",
-    path: "/functions/v1/analyze",
-    description: "Request AI analysis of current market conditions.",
-    params: ["rsi: number", "price: number", "symbol: string"],
+    description: "Run the rule engine plus optional AI confirmation, then place, close, or hold for the authenticated user.",
+    params: [
+      "side: long|short|close (optional manual override)",
+      "No body for user-triggered analysis-only runs",
+      "user_id: string (required only for service-role manual calls)",
+    ],
   },
 ];
 
 export default function ApiDocsPage() {
   return (
-    <div className="max-w-3xl mx-auto space-y-6 animate-slide-in">
+    <div className="mx-auto max-w-3xl space-y-6 animate-slide-in">
       <div>
         <h1 className="text-2xl font-bold tracking-tight">API Documentation</h1>
         <p className="text-sm text-muted-foreground">
-          Backend function endpoints for webhook testing
+          Authenticated edge functions that are actually implemented in this repository
         </p>
       </div>
 
       <div className="space-y-4">
-        {endpoints.map((ep) => (
-          <Card key={ep.path} className="glass-card border-border">
+        {endpoints.map((endpoint) => (
+          <Card key={endpoint.path} className="glass-card border-border">
             <CardHeader className="pb-3">
               <div className="flex items-center gap-3">
-                <Badge
-                  variant={ep.method === "GET" ? "outline" : "default"}
-                  className="font-mono text-xs"
-                >
-                  {ep.method}
+                <Badge variant={endpoint.method === "GET" ? "outline" : "default"} className="font-mono text-xs">
+                  {endpoint.method}
                 </Badge>
-                <CardTitle className="text-base font-mono">{ep.path}</CardTitle>
+                <CardTitle className="text-base font-mono">{endpoint.path}</CardTitle>
               </div>
-              <CardDescription>{ep.description}</CardDescription>
+              <CardDescription>{endpoint.description}</CardDescription>
             </CardHeader>
             <CardContent>
               <div className="space-y-1">
-                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                  Parameters
-                </p>
-                {ep.params.map((p) => (
-                  <p key={p} className="text-sm font-mono text-foreground/80">
-                    • {p}
+                <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Parameters</p>
+                {endpoint.params.map((param) => (
+                  <p key={param} className="text-sm font-mono text-foreground/80">
+                    • {param}
                   </p>
                 ))}
               </div>
@@ -73,17 +60,18 @@ export default function ApiDocsPage() {
         <CardHeader>
           <CardTitle className="text-lg">Authentication</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-2">
+        <CardContent className="space-y-3">
           <p className="text-sm text-muted-foreground">
-            All endpoints require a valid Bearer token in the Authorization header.
+            Browser calls should use the signed-in Supabase session token. Scheduled automation should call
+            `scalper` with a service-role token from a secure server or cron job, never from the frontend.
           </p>
-          <div className="bg-secondary rounded-lg p-3">
+          <div className="rounded-lg bg-secondary p-3">
             <code className="text-xs font-mono text-foreground">
               curl -X POST \<br />
-              &nbsp;&nbsp;-H "Authorization: Bearer YOUR_TOKEN" \<br />
+              &nbsp;&nbsp;-H "Authorization: Bearer USER_JWT" \<br />
               &nbsp;&nbsp;-H "Content-Type: application/json" \<br />
-              &nbsp;&nbsp;-d '{`{"side":"buy","size":0.001}`}' \<br />
-              &nbsp;&nbsp;https://your-project.supabase.co/functions/v1/place-order
+              &nbsp;&nbsp;-d '{`{"side":"long"}`}' \<br />
+              &nbsp;&nbsp;https://your-project.supabase.co/functions/v1/scalper
             </code>
           </div>
         </CardContent>

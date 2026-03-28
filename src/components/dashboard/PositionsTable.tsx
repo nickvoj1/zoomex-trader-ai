@@ -2,19 +2,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { X } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import type { Tables } from "@/integrations/supabase/types";
 
-interface Trade {
-  id: string;
-  symbol: string;
-  side: string;
-  size: number;
-  entry_price: number;
-  tp: number | null;
-  sl: number | null;
-  pnl: number | null;
-  leverage: number;
-  status: string;
-}
+type Trade = Tables<"trades">;
 
 interface PositionsTableProps {
   trades: Trade[];
@@ -40,6 +30,7 @@ export function PositionsTable({ trades, onClose }: PositionsTableProps) {
         ) : (
           <div className="space-y-2">
             {openTrades.map((trade) => {
+              const hasRealizedPnl = trade.pnl !== null;
               const pnl = trade.pnl ?? 0;
               return (
                 <div
@@ -58,6 +49,11 @@ export function PositionsTable({ trades, onClose }: PositionsTableProps) {
                       <p className="text-[10px] text-muted-foreground">
                         {trade.size} BTC · {trade.leverage}x
                       </p>
+                      {trade.setup_type && (
+                        <p className="text-[10px] uppercase text-muted-foreground">
+                          {trade.setup_type.replace("_", " ")}
+                        </p>
+                      )}
                     </div>
                   </div>
                   <div className="flex items-center gap-3">
@@ -65,8 +61,12 @@ export function PositionsTable({ trades, onClose }: PositionsTableProps) {
                       <p className="text-xs text-muted-foreground font-mono">
                         Entry: ${trade.entry_price?.toLocaleString()}
                       </p>
-                      <p className={`text-sm font-mono font-bold ${pnl >= 0 ? "text-profit" : "text-loss"}`}>
-                        {pnl >= 0 ? "+" : ""}{pnl.toFixed(2)}%
+                      <p
+                        className={`text-sm font-mono font-bold ${
+                          !hasRealizedPnl ? "text-muted-foreground" : pnl >= 0 ? "text-profit" : "text-loss"
+                        }`}
+                      >
+                        {!hasRealizedPnl ? "Open" : `${pnl >= 0 ? "+" : ""}$${pnl.toFixed(2)}`}
                       </p>
                     </div>
                     {onClose && (

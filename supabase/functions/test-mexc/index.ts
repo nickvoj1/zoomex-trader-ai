@@ -1,64 +1,72 @@
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { corsHeaders, createAdminClient, HttpError, jsonResponse, resolveCaller } from "../_shared/auth.ts";
+import { getAccountAssets, MexcAsset } from "../_shared/mexc.ts";
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers":
-    "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
-};
-
-const MEXC_FUTURES = "https://contract.mexc.com";
-
-async function hmacSHA256(secret: string, message: string): Promise<string> {
-  const enc = new TextEncoder();
-  const key = await crypto.subtle.importKey("raw", enc.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
-  const sig = await crypto.subtle.sign("HMAC", key, enc.encode(message));
-  return Array.from(new Uint8Array(sig)).map(b => b.toString(16).padStart(2, "0")).join("");
+interface ProfileRecord {
+  demo_mode: boolean;
 }
 
 Deno.serve(async (req) => {
-  if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
+  if (req.method === "OPTIONS") {
+    return new Response(null, { headers: corsHeaders });
+  }
 
   try {
-    const { user_id } = await req.json();
-    if (!user_id) throw new Error("user_id required");
+    const { isServiceRole, userId: callerUserId } = await resolveCaller(req);
+    const body = req.method === "POST" ? await req.json().catch(() => ({})) as Record<string, unknown> : {};
+    const requestedUserId = typeof body.user_id === "string" ? body.user_id : null;
 
-    const supabaseAdmin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
-    const { data: keys } = await supabaseAdmin.from("api_keys").select("mexc_key, mexc_secret, openai_key").eq("user_id", user_id).maybeSingle();
-
-    if (!keys?.mexc_key || !keys?.mexc_secret) {
-      return new Response(JSON.stringify({ success: false, error: "No MEXC API keys found" }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    if (!isServiceRole && requestedUserId && requestedUserId !== callerUserId) {
+      throw new HttpError(403, "You can only test your own account");
     }
 
-    // Test futures account assets
-    const timestamp = Date.now().toString();
-    const paramStr = `timestamp=${timestamp}`;
-    const signature = await hmacSHA256(keys.mexc_secret, paramStr);
+    const userId = isServiceRole ? requestedUserId : callerUserId;
+    if (!userId) {
+      throw new HttpError(400, "user_id is required for service-role calls");
+    }
 
-    const res = await fetch(`${MEXC_FUTURES}/api/v1/private/account/assets`, {
-      method: "GET",
-      headers: {
-        "ApiKey": keys.mexc_key,
-        "Request-Time": timestamp,
-        "Signature": signature,
-        "Content-Type": "application/json",
-      },
-    });
-    const data = await res.json();
+    const supabaseAdmin = createAdminClient();
+    const { data: keyRow, error: keyError } = await supabaseAdmin
+      .from("api_keys")
+      .select("mexc_key, mexc_secret, openai_key")
+      .eq("user_id", userId)
+      .maybeSingle();
 
-    const success = data?.success === true || data?.code === 0;
-    const assets = success && Array.isArray(data?.data)
-      ? data.data.filter((a: any) => Number(a.availableBalance) > 0 || Number(a.frozenBalance) > 0).slice(0, 10)
-      : null;
+    if (keyError) throw keyError;
+    if (!keyRow?.mexc_key || !keyRow?.mexc_secret) {
+      return jsonResponse({ success: false, error: "No MEXC API keys found" }, { status: 400 });
+    }
 
-    return new Response(JSON.stringify({
+    const { data: profileRow } = await supabaseAdmin
+      .from("profiles")
+      .select("demo_mode")
+      .eq("user_id", userId)
+      .maybeSingle();
+
+    const profile = (profileRow ?? { demo_mode: true }) as ProfileRecord;
+    const assetResponse = await getAccountAssets(keyRow.mexc_key, keyRow.mexc_secret);
+    const success = assetResponse.success === true || assetResponse.code === 0;
+    const assets = success
+      ? ((assetResponse.data ?? []) as MexcAsset[])
+        .filter((asset) => Number(asset.availableBalance ?? 0) > 0 || Number(asset.frozenBalance ?? 0) > 0)
+        .slice(0, 10)
+      : [];
+
+    return jsonResponse({
       success,
-      mode: demoMode ? "demo" : "live",
-      code: data?.code,
-      msg: data?.msg,
+      mode: profile.demo_mode ? "paper" : "live",
+      code: assetResponse.code,
+      msg: assetResponse.msg ?? assetResponse.message ?? null,
       assets,
-      openai_configured: !!keys.openai_key,
-    }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
-  } catch (err) {
-    return new Response(JSON.stringify({ success: false, error: String(err) }), { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      openai_configured: Boolean(keyRow.openai_key),
+    });
+  } catch (error) {
+    if (error instanceof HttpError) {
+      return jsonResponse({ success: false, error: error.message }, { status: error.status });
+    }
+
+    return jsonResponse(
+      { success: false, error: error instanceof Error ? error.message : String(error) },
+      { status: 500 },
+    );
   }
 });
