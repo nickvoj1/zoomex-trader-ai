@@ -15,7 +15,7 @@
     --popover: 220 18% 10%;
     --popover-foreground: 210 20% 92%;
 
-    --primary: 152 100% 45%;
+    --primary: 28 96% 56%;
     --primary-foreground: 220 20% 7%;
 
     --secondary: 220 16% 16%;
@@ -32,23 +32,23 @@
 
     --border: 220 14% 18%;
     --input: 220 14% 18%;
-    --ring: 152 100% 45%;
+    --ring: 28 96% 56%;
 
     --radius: 0.75rem;
 
-    --profit: 152 100% 45%;
+    --profit: 28 96% 56%;
     --loss: 0 84% 60%;
     --warning: 38 92% 50%;
     --chart-grid: 220 14% 15%;
 
     --sidebar-background: 220 20% 8%;
     --sidebar-foreground: 210 20% 85%;
-    --sidebar-primary: 152 100% 45%;
+    --sidebar-primary: 28 96% 56%;
     --sidebar-primary-foreground: 220 20% 7%;
     --sidebar-accent: 220 16% 14%;
     --sidebar-accent-foreground: 210 20% 92%;
     --sidebar-border: 220 14% 16%;
-    --sidebar-ring: 152 100% 45%;
+    --sidebar-ring: 28 96% 56%;
 
     --glass-bg: 220 18% 10% / 0.7;
     --glass-border: 220 14% 22%;
@@ -82,14 +82,14 @@
     background-color: hsl(var(--loss));
   }
   .glow-green {
-    box-shadow: 0 0 20px hsl(152 100% 45% / 0.15), 0 0 60px hsl(152 100% 45% / 0.05);
+    box-shadow: 0 0 20px hsl(28 96% 56% / 0.18), 0 0 60px hsl(28 96% 56% / 0.07);
   }
   .glow-red {
     box-shadow: 0 0 20px hsl(0 84% 60% / 0.15), 0 0 60px hsl(0 84% 60% / 0.05);
   }
   .gradient-mesh {
     background:
-      radial-gradient(ellipse at 20% 50%, hsl(152 100% 45% / 0.04) 0%, transparent 50%),
+      radial-gradient(ellipse at 20% 50%, hsl(28 96% 56% / 0.06) 0%, transparent 50%),
       radial-gradient(ellipse at 80% 20%, hsl(199 89% 48% / 0.04) 0%, transparent 50%),
       hsl(var(--background));
   }

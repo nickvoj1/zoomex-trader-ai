@@ -31,6 +31,29 @@ interface EquityPoint {
   equity: number;
 }
 
+interface ConnectionAsset {
+  currency: string;
+  availableBalance?: number | string;
+  frozenBalance?: number | string;
+  positionMargin?: number | string;
+}
+
+interface ConnectionTestResult {
+  success: boolean;
+  mode: "paper" | "live";
+  assets?: ConnectionAsset[];
+  msg?: string | null;
+  error?: string;
+}
+
+interface BalanceSnapshot {
+  currency: string;
+  available: number;
+  locked: number;
+  total: number;
+  updatedAt: string;
+}
+
 function calculateRsiSeries(closes: number[], period = 14) {
   const values = Array.from({ length: closes.length }, () => 50);
   if (closes.length < period + 1) {
@@ -138,6 +161,32 @@ function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Unknown error";
 }
 
+function toNumber(value: number | string | null | undefined) {
+  return Number(value ?? 0);
+}
+
+function formatBalance(value: number, currency: string) {
+  return currency === "USDT" ? `$${value.toFixed(2)}` : `${value.toFixed(4)} ${currency}`;
+}
+
+function deriveBalanceSnapshot(assets: ConnectionAsset[] | undefined): BalanceSnapshot | null {
+  if (!assets || assets.length === 0) return null;
+
+  const asset = assets.find((entry) => entry.currency === "USDT") ?? assets[0];
+  if (!asset) return null;
+
+  const available = toNumber(asset.availableBalance);
+  const locked = toNumber(asset.frozenBalance) + toNumber(asset.positionMargin);
+
+  return {
+    currency: asset.currency,
+    available,
+    locked,
+    total: available + locked,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
 function applyTradeState(
   tradeRows: TradeRow[] | null,
   setOpenTrades: Dispatch<SetStateAction<TradeRow[]>>,
@@ -197,6 +246,9 @@ export default function Dashboard() {
   const [stats, setStats] = useState({ totalPnl: 0, winRate: 0, totalTrades: 0, maxDrawdown: 0 });
   const [equityData, setEquityData] = useState<EquityPoint[]>([{ time: "Start", equity: PAPER_STARTING_BALANCE }]);
   const [hasKeys, setHasKeys] = useState(false);
+  const [isDemoMode, setIsDemoMode] = useState(true);
+  const [balanceSnapshot, setBalanceSnapshot] = useState<BalanceSnapshot | null>(null);
+  const [balanceError, setBalanceError] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -235,6 +287,13 @@ export default function Dashboard() {
         .maybeSingle();
       setHasKeys(Boolean(keyData?.mexc_key));
 
+      const { data: profileData } = await supabase
+        .from("profiles")
+        .select("demo_mode")
+        .eq("user_id", user.id)
+        .maybeSingle();
+      setIsDemoMode(profileData?.demo_mode ?? true);
+
       const { data: signalRows } = await supabase
         .from("signals")
         .select("*")
@@ -261,6 +320,50 @@ export default function Dashboard() {
 
     void loadData();
   }, [user]);
+
+  useEffect(() => {
+    if (!user || !hasKeys) {
+      setBalanceSnapshot(null);
+      setBalanceError(null);
+      return;
+    }
+
+    let active = true;
+
+    const loadBalance = async () => {
+      try {
+        const { data, error } = await supabase.functions.invoke("test-mexc", {
+          body: {},
+        });
+        if (error) throw error;
+
+        const result = data as ConnectionTestResult;
+        if (!active) return;
+
+        if (!result.success) {
+          setBalanceSnapshot(null);
+          setBalanceError(result.msg || result.error || "Unable to load MEXC balance");
+          return;
+        }
+
+        setBalanceSnapshot(deriveBalanceSnapshot(result.assets));
+        setIsDemoMode(result.mode === "paper");
+        setBalanceError(null);
+      } catch (error) {
+        if (!active) return;
+        setBalanceSnapshot(null);
+        setBalanceError(getErrorMessage(error));
+      }
+    };
+
+    void loadBalance();
+    const interval = window.setInterval(loadBalance, 60_000);
+
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+    };
+  }, [user, hasKeys]);
 
   useEffect(() => {
     if (!user) return;
@@ -330,20 +433,68 @@ export default function Dashboard() {
     }
   };
 
+  const paperBalance = equityData.at(-1)?.equity ?? PAPER_STARTING_BALANCE;
+  const accountLabel = isDemoMode ? "Paper Balance" : "MEXC Balance";
+  const accountValue = isDemoMode
+    ? `$${paperBalance.toFixed(2)}`
+    : balanceSnapshot
+      ? formatBalance(balanceSnapshot.total, balanceSnapshot.currency)
+      : hasKeys
+        ? "Loading..."
+        : "No keys";
+  const accountDetail = isDemoMode
+    ? balanceSnapshot
+      ? `Paper mode · MEXC ${formatBalance(balanceSnapshot.total, balanceSnapshot.currency)}`
+      : "Paper mode simulated from trade history"
+    : balanceSnapshot
+      ? `Available ${formatBalance(balanceSnapshot.available, balanceSnapshot.currency)} · Locked ${formatBalance(balanceSnapshot.locked, balanceSnapshot.currency)}`
+      : balanceError || "Fetching exchange balance";
+  const accountPositive = isDemoMode ? paperBalance >= PAPER_STARTING_BALANCE : Boolean(balanceSnapshot && balanceSnapshot.total > 0);
+
   return (
     <div className="space-y-4 animate-slide-in">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Dashboard</h1>
           <p className="text-sm text-muted-foreground">BTC_USDT perpetual on MEXC futures</p>
         </div>
-        <div className="flex items-center gap-2">
-          <span className={`h-2 w-2 rounded-full ${hasKeys ? "bg-profit animate-pulse-green" : "bg-warning"}`} />
-          <span className="text-xs text-muted-foreground">{hasKeys ? "Keys configured" : "No API keys"}</span>
+        <div className="glass-card rounded-xl px-4 py-3 lg:min-w-[320px]">
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Account Snapshot</p>
+              <p className="mt-1 text-lg font-bold font-mono">
+                {balanceSnapshot
+                  ? formatBalance(balanceSnapshot.total, balanceSnapshot.currency)
+                  : isDemoMode
+                    ? `$${paperBalance.toFixed(2)}`
+                    : "Unavailable"}
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className={`h-2 w-2 rounded-full ${hasKeys ? "bg-profit animate-pulse-green" : "bg-warning"}`} />
+              <span className="text-xs text-muted-foreground">
+                {hasKeys ? `${isDemoMode ? "Paper" : "Live"} mode` : "No API keys"}
+              </span>
+            </div>
+          </div>
+          <p className="mt-2 text-xs text-muted-foreground">
+            {balanceSnapshot
+              ? `Available ${formatBalance(balanceSnapshot.available, balanceSnapshot.currency)} · Locked ${formatBalance(balanceSnapshot.locked, balanceSnapshot.currency)}`
+              : balanceError || (isDemoMode ? "Paper equity updates from closed trades." : "Connect MEXC keys to load your balance.")}
+          </p>
+          {balanceSnapshot ? (
+            <p className="mt-1 text-[10px] uppercase tracking-wide text-muted-foreground/70">
+              Updated {new Date(balanceSnapshot.updatedAt).toLocaleTimeString()}
+            </p>
+          ) : null}
         </div>
       </div>
 
       <StatsCards
+        accountLabel={accountLabel}
+        accountValue={accountValue}
+        accountDetail={accountDetail}
+        accountPositive={accountPositive}
         totalPnl={stats.totalPnl}
         winRate={stats.winRate}
         totalTrades={stats.totalTrades}

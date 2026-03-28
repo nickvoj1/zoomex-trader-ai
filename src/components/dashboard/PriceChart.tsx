@@ -26,7 +26,7 @@ export function PriceChart({ data }: PriceChartProps) {
   const chartData = data.map((d) => ({
     ...d,
     body: [Math.min(d.open, d.close), Math.max(d.open, d.close)],
-    color: d.close >= d.open ? "hsl(152, 100%, 45%)" : "hsl(0, 84%, 60%)",
+    color: d.close >= d.open ? "hsl(28, 96%, 56%)" : "hsl(0, 84%, 60%)",
     change: d.close - d.open,
   }));
 
@@ -67,7 +67,7 @@ export function PriceChart({ data }: PriceChartProps) {
                 fontSize: 12,
               }}
             />
-            <Bar yAxisId="price" dataKey="close" fill="hsl(152, 100%, 45%)" opacity={0.3} barSize={4} />
+            <Bar yAxisId="price" dataKey="close" fill="hsl(28, 96%, 56%)" opacity={0.3} barSize={4} />
             <Line
               yAxisId="price"
               type="monotone"

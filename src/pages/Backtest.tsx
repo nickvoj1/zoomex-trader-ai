@@ -389,8 +389,8 @@ export default function BacktestPage() {
                   <AreaChart data={result.equity}>
                     <defs>
                       <linearGradient id="btGrad" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor="hsl(152, 100%, 45%)" stopOpacity={0.3} />
-                        <stop offset="100%" stopColor="hsl(152, 100%, 45%)" stopOpacity={0} />
+                        <stop offset="0%" stopColor="hsl(28, 96%, 56%)" stopOpacity={0.3} />
+                        <stop offset="100%" stopColor="hsl(28, 96%, 56%)" stopOpacity={0} />
                       </linearGradient>
                     </defs>
                     <CartesianGrid strokeDasharray="3 3" stroke="hsl(220, 14%, 15%)" />
@@ -404,7 +404,7 @@ export default function BacktestPage() {
                         color: "hsl(210, 20%, 92%)",
                       }}
                     />
-                    <Area type="monotone" dataKey="equity" stroke="hsl(152, 100%, 45%)" fill="url(#btGrad)" strokeWidth={2} />
+                    <Area type="monotone" dataKey="equity" stroke="hsl(28, 96%, 56%)" fill="url(#btGrad)" strokeWidth={2} />
                   </AreaChart>
                 </ResponsiveContainer>
               </div>
