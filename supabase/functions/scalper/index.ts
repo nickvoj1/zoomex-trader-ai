@@ -321,7 +321,7 @@ function applyModelOverlay(
   if (delta < -0.08) {
     return {
       ...decision,
-      action: "hold",
+      action: "hold" as TradeAction,
       confidence: clamp(decision.confidence + confidenceAdjustment, 0, 99),
       reasoning: `${decision.reasoning} · model vetoed ${decision.action} (${(probability * 100).toFixed(1)}% < ${(threshold * 100).toFixed(1)}%)`,
       features: {
