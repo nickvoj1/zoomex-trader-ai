@@ -383,7 +383,7 @@ Deno.serve(async (req) => {
         // side: 1=open long, 3=open short
         const side = isLong ? "1" : "3";
 
-        const orderRes = await submitOrder(keys.mexc_key, keys.mexc_secret, {
+        const orderRes = await submitOrder(baseUrl, keys.mexc_key, keys.mexc_secret, {
           symbol: "BTC_USDT",
           price: currentPrice.toString(),
           vol: contracts.toString(),
