@@ -41,8 +41,8 @@ export default function SettingsPage() {
         .maybeSingle();
       if (keyData) {
         setKeys({
-          zoomex_key: keyData.zoomex_key || "",
-          zoomex_secret: keyData.zoomex_secret || "",
+          mexc_key: keyData.mexc_key || "",
+          mexc_secret: keyData.mexc_secret || "",
           coincodex_key: keyData.coincodex_key || "",
           openai_key: keyData.openai_key || "",
           telegram_token: keyData.telegram_token || "",
