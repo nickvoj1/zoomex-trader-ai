@@ -6,8 +6,7 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
-const MEXC_FUTURES_LIVE = "https://contract.mexc.com";
-const MEXC_FUTURES_DEMO = "https://contract.testnet.mexc.com";
+const MEXC_FUTURES = "https://contract.mexc.com";
 
 // ── HMAC-SHA256 ─────────────────────────────────────────────────────
 
@@ -39,17 +38,20 @@ async function mexcFuturesPrivate(
   params["timestamp"] = timestamp;
   const paramStr = Object.keys(params).sort().map(k => `${k}=${params[k]}`).join("&");
   const signature = await hmacSHA256(apiSecret, paramStr);
+  const fullParams = paramStr + "&signature=" + signature;
 
-  const url = `${baseUrl}${path}`;
-  const body = paramStr + "&signature=" + signature;
+  const isGet = method.toUpperCase() === "GET";
+  const url = isGet ? `${baseUrl}${path}?${fullParams}` : `${baseUrl}${path}`;
 
   const res = await fetch(url, {
     method,
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
       "ApiKey": apiKey,
+      "Request-Time": timestamp,
+      "Signature": signature,
     },
-    body,
+    ...(isGet ? {} : { body: fullParams }),
   });
   return res.json();
 }
@@ -123,20 +125,42 @@ async function fetchFuturesOHLCV(baseUrl: string): Promise<{
     limit: "50",
   });
 
-  if (!data?.data || !Array.isArray(data.data)) {
+  const d = data?.data;
+  if (!d) {
     throw new Error(`Kline fetch failed: ${JSON.stringify(data).slice(0, 300)}`);
   }
 
-  const candles = data.data.map((k: any) => ({
-    open: Number(k.open),
-    high: Number(k.high),
-    low: Number(k.low),
-    close: Number(k.close),
-    vol: Number(k.vol),
-  }));
+  // MEXC Futures klines return separate arrays: data.time[], data.open[], data.close[], etc.
+  // OR an array of candle objects — handle both formats
+  let candles: Array<{ open: number; high: number; low: number; close: number; vol: number }>;
 
-  const closes = candles.map((c: any) => c.close);
-  const volumes = candles.map((c: any) => c.vol);
+  if (Array.isArray(d)) {
+    // Array of candle objects
+    candles = d.map((k: any) => ({
+      open: Number(k.open), high: Number(k.high),
+      low: Number(k.low), close: Number(k.close), vol: Number(k.vol),
+    }));
+  } else if (d.close && Array.isArray(d.close)) {
+    // Separate arrays format
+    const len = d.close.length;
+    candles = [];
+    for (let i = 0; i < len; i++) {
+      candles.push({
+        open: Number(d.open[i]), high: Number(d.high[i]),
+        low: Number(d.low[i]), close: Number(d.close[i]),
+        vol: Number(d.vol?.[i] || d.volume?.[i] || 0),
+      });
+    }
+  } else {
+    throw new Error(`Unexpected kline format: ${JSON.stringify(d).slice(0, 300)}`);
+  }
+
+  if (candles.length === 0) {
+    throw new Error("No kline data returned");
+  }
+
+  const closes = candles.map(c => c.close);
+  const volumes = candles.map(c => c.vol);
   const currentPrice = closes[closes.length - 1];
 
   return { closes, volumes, currentPrice, candles };
@@ -264,8 +288,7 @@ Deno.serve(async (req) => {
     }
 
     // Fetch market data once
-    // Fetch market data once (use live for klines — testnet may not have full data)
-    const { closes, volumes, currentPrice, candles } = await fetchFuturesOHLCV(MEXC_FUTURES_LIVE);
+    const { closes, volumes, currentPrice, candles } = await fetchFuturesOHLCV(MEXC_FUTURES);
     const rsi = calculateRSI(closes);
     const ema9 = calculateEMA(closes, 9);
     const ema21 = calculateEMA(closes, 21);
@@ -279,7 +302,7 @@ Deno.serve(async (req) => {
 
     for (const profile of profiles) {
       const { user_id, max_risk_pct, leverage, telegram_id, demo_mode } = profile as any;
-      const baseUrl = demo_mode ? MEXC_FUTURES_DEMO : MEXC_FUTURES_LIVE;
+      const baseUrl = MEXC_FUTURES;
       console.log(`User ${user_id}: ${demo_mode ? "DEMO" : "LIVE"} mode`);
 
       const { data: keys } = await supabaseAdmin
