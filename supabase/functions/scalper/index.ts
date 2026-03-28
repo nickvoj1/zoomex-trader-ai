@@ -63,7 +63,7 @@ async function getOpenPositions(baseUrl: string, apiKey: string, apiSecret: stri
 }
 
 async function submitOrder(
-  apiKey: string, apiSecret: string,
+  baseUrl: string, apiKey: string, apiSecret: string,
   params: {
     symbol: string; price: string; vol: string;
     side: string; type: string; openType: string;
@@ -72,7 +72,7 @@ async function submitOrder(
   }
 ) {
   const orderParams: Record<string, string> = { ...params };
-  return mexcFuturesPrivate(apiKey, apiSecret, "POST", "/api/v1/private/order/submit", orderParams);
+  return mexcFuturesPrivate(baseUrl, apiKey, apiSecret, "POST", "/api/v1/private/order/submit", orderParams);
 }
 
 // ── Technical Indicators ────────────────────────────────────────────
