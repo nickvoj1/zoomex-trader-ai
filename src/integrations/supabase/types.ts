@@ -50,362 +50,74 @@ export type Database = {
         }
         Relationships: []
       }
-      execution_events: {
-        Row: {
-          created_at: string
-          details: Json | null
-          event_type: string
-          id: string
-          latency_ms: number | null
-          status: string
-          symbol: string
-          user_id: string | null
-          venue: string
-        }
-        Insert: {
-          created_at?: string
-          details?: Json | null
-          event_type: string
-          id?: string
-          latency_ms?: number | null
-          status: string
-          symbol?: string
-          user_id?: string | null
-          venue: string
-        }
-        Update: {
-          created_at?: string
-          details?: Json | null
-          event_type?: string
-          id?: string
-          latency_ms?: number | null
-          status?: string
-          symbol?: string
-          user_id?: string | null
-          venue?: string
-        }
-        Relationships: []
-      }
-      market_snapshots: {
-        Row: {
-          created_at: string
-          cross_venue_basis_bps: number | null
-          funding_rate_pct_8h: number | null
-          id: string
-          imbalance: number | null
-          latency_ms: number | null
-          liquidation_bias: number | null
-          liquidation_intensity: number | null
-          long_short_ratio: number | null
-          mark_price: number | null
-          mid_price: number | null
-          open_interest_change_pct: number | null
-          open_interest_usd: number | null
-          raw_payload: Json | null
-          snapshot_type: string
-          spread_bps: number | null
-          symbol: string
-          taker_imbalance: number | null
-          venue: string
-        }
-        Insert: {
-          created_at?: string
-          cross_venue_basis_bps?: number | null
-          funding_rate_pct_8h?: number | null
-          id?: string
-          imbalance?: number | null
-          latency_ms?: number | null
-          liquidation_bias?: number | null
-          liquidation_intensity?: number | null
-          long_short_ratio?: number | null
-          mark_price?: number | null
-          mid_price?: number | null
-          open_interest_change_pct?: number | null
-          open_interest_usd?: number | null
-          raw_payload?: Json | null
-          snapshot_type: string
-          spread_bps?: number | null
-          symbol?: string
-          taker_imbalance?: number | null
-          venue: string
-        }
-        Update: {
-          created_at?: string
-          cross_venue_basis_bps?: number | null
-          funding_rate_pct_8h?: number | null
-          id?: string
-          imbalance?: number | null
-          latency_ms?: number | null
-          liquidation_bias?: number | null
-          liquidation_intensity?: number | null
-          long_short_ratio?: number | null
-          mark_price?: number | null
-          mid_price?: number | null
-          open_interest_change_pct?: number | null
-          open_interest_usd?: number | null
-          raw_payload?: Json | null
-          snapshot_type?: string
-          spread_bps?: number | null
-          symbol?: string
-          taker_imbalance?: number | null
-          venue?: string
-        }
-        Relationships: []
-      }
-      model_artifacts: {
-        Row: {
-          artifact: Json
-          created_at: string
-          horizon_bars: number
-          id: string
-          metrics: Json
-          model_name: string
-          move_threshold_pct: number
-          side: string
-          source_run_id: string | null
-          symbol: string
-          user_id: string | null
-        }
-        Insert: {
-          artifact?: Json
-          created_at?: string
-          horizon_bars: number
-          id?: string
-          metrics?: Json
-          model_name: string
-          move_threshold_pct: number
-          side: string
-          source_run_id?: string | null
-          symbol?: string
-          user_id?: string | null
-        }
-        Update: {
-          artifact?: Json
-          created_at?: string
-          horizon_bars?: number
-          id?: string
-          metrics?: Json
-          model_name?: string
-          move_threshold_pct?: number
-          side?: string
-          source_run_id?: string | null
-          symbol?: string
-          user_id?: string | null
-        }
-        Relationships: []
-      }
-      position_reconciliations: {
-        Row: {
-          created_at: string
-          exchange_position_count: number
-          exchange_snapshot: Json | null
-          id: string
-          notes: string | null
-          open_trade_count: number
-          status: string
-          symbol: string
-          trade_snapshot: Json | null
-          user_id: string
-        }
-        Insert: {
-          created_at?: string
-          exchange_position_count?: number
-          exchange_snapshot?: Json | null
-          id?: string
-          notes?: string | null
-          open_trade_count?: number
-          status: string
-          symbol?: string
-          trade_snapshot?: Json | null
-          user_id: string
-        }
-        Update: {
-          created_at?: string
-          exchange_position_count?: number
-          exchange_snapshot?: Json | null
-          id?: string
-          notes?: string | null
-          open_trade_count?: number
-          status?: string
-          symbol?: string
-          trade_snapshot?: Json | null
-          user_id?: string
-        }
-        Relationships: []
-      }
       profiles: {
         Row: {
-          allow_mean_reversion_trades: boolean
-          allow_trend_trades: boolean
           auto_trade: boolean
           created_at: string
-          daily_loss_limit_pct: number
           demo_mode: boolean
           email: string | null
           id: string
           leverage: number
-          max_consecutive_losses: number
           max_risk_pct: number
-          min_confidence: number
           telegram_id: string | null
           updated_at: string
           user_id: string
         }
         Insert: {
-          allow_mean_reversion_trades?: boolean
-          allow_trend_trades?: boolean
           auto_trade?: boolean
           created_at?: string
-          daily_loss_limit_pct?: number
           demo_mode?: boolean
           email?: string | null
           id?: string
           leverage?: number
-          max_consecutive_losses?: number
           max_risk_pct?: number
-          min_confidence?: number
           telegram_id?: string | null
           updated_at?: string
           user_id: string
         }
         Update: {
-          allow_mean_reversion_trades?: boolean
-          allow_trend_trades?: boolean
           auto_trade?: boolean
           created_at?: string
-          daily_loss_limit_pct?: number
           demo_mode?: boolean
           email?: string | null
           id?: string
           leverage?: number
-          max_consecutive_losses?: number
           max_risk_pct?: number
-          min_confidence?: number
           telegram_id?: string | null
           updated_at?: string
           user_id?: string
-        }
-        Relationships: []
-      }
-      research_runs: {
-        Row: {
-          artifact_path: string | null
-          config: Json
-          created_at: string
-          id: string
-          objective: string | null
-          run_type: string
-          summary: Json
-          symbol: string
-          user_id: string | null
-        }
-        Insert: {
-          artifact_path?: string | null
-          config?: Json
-          created_at?: string
-          id?: string
-          objective?: string | null
-          run_type: string
-          summary?: Json
-          symbol?: string
-          user_id?: string | null
-        }
-        Update: {
-          artifact_path?: string | null
-          config?: Json
-          created_at?: string
-          id?: string
-          objective?: string | null
-          run_type?: string
-          summary?: Json
-          symbol?: string
-          user_id?: string | null
         }
         Relationships: []
       }
       signals: {
         Row: {
           ai_reasoning: string | null
-          confidence: number | null
           created_at: string
-          decision_source: string | null
           id: string
           price: number | null
           rsi: number | null
           signal: Database["public"]["Enums"]["signal_type"]
-          signal_context: Json | null
           symbol: string
           user_id: string
         }
         Insert: {
           ai_reasoning?: string | null
-          confidence?: number | null
           created_at?: string
-          decision_source?: string | null
           id?: string
           price?: number | null
           rsi?: number | null
           signal?: Database["public"]["Enums"]["signal_type"]
-          signal_context?: Json | null
           symbol?: string
           user_id: string
         }
         Update: {
           ai_reasoning?: string | null
-          confidence?: number | null
           created_at?: string
-          decision_source?: string | null
           id?: string
           price?: number | null
           rsi?: number | null
           signal?: Database["public"]["Enums"]["signal_type"]
-          signal_context?: Json | null
           symbol?: string
-          user_id?: string
-        }
-        Relationships: []
-      }
-      trade_tca: {
-        Row: {
-          created_at: string
-          entry_slippage_bps: number | null
-          estimated_fees_usd: number | null
-          exit_slippage_bps: number | null
-          gross_edge_usd: number | null
-          holding_minutes: number | null
-          id: string
-          metadata: Json | null
-          net_edge_usd: number | null
-          symbol: string
-          trade_id: string
-          user_id: string
-        }
-        Insert: {
-          created_at?: string
-          entry_slippage_bps?: number | null
-          estimated_fees_usd?: number | null
-          exit_slippage_bps?: number | null
-          gross_edge_usd?: number | null
-          holding_minutes?: number | null
-          id?: string
-          metadata?: Json | null
-          net_edge_usd?: number | null
-          symbol?: string
-          trade_id: string
-          user_id: string
-        }
-        Update: {
-          created_at?: string
-          entry_slippage_bps?: number | null
-          estimated_fees_usd?: number | null
-          exit_slippage_bps?: number | null
-          gross_edge_usd?: number | null
-          holding_minutes?: number | null
-          id?: string
-          metadata?: Json | null
-          net_edge_usd?: number | null
-          symbol?: string
-          trade_id?: string
           user_id?: string
         }
         Relationships: []
@@ -415,7 +127,6 @@ export type Database = {
           closed_at: string | null
           created_at: string
           entry_price: number
-          entry_confidence: number | null
           exit_price: number | null
           id: string
           leverage: number
@@ -423,10 +134,8 @@ export type Database = {
           side: string
           size: number
           sl: number | null
-          setup_type: string | null
           status: Database["public"]["Enums"]["trade_status"]
           symbol: string
-          trade_metadata: Json | null
           tp: number | null
           user_id: string
         }
@@ -434,7 +143,6 @@ export type Database = {
           closed_at?: string | null
           created_at?: string
           entry_price: number
-          entry_confidence?: number | null
           exit_price?: number | null
           id?: string
           leverage?: number
@@ -442,10 +150,8 @@ export type Database = {
           side: string
           size: number
           sl?: number | null
-          setup_type?: string | null
           status?: Database["public"]["Enums"]["trade_status"]
           symbol?: string
-          trade_metadata?: Json | null
           tp?: number | null
           user_id: string
         }
@@ -453,7 +159,6 @@ export type Database = {
           closed_at?: string | null
           created_at?: string
           entry_price?: number
-          entry_confidence?: number | null
           exit_price?: number | null
           id?: string
           leverage?: number
@@ -461,10 +166,8 @@ export type Database = {
           side?: string
           size?: number
           sl?: number | null
-          setup_type?: string | null
           status?: Database["public"]["Enums"]["trade_status"]
           symbol?: string
-          trade_metadata?: Json | null
           tp?: number | null
           user_id?: string
         }
