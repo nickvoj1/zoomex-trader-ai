@@ -264,7 +264,8 @@ Deno.serve(async (req) => {
     }
 
     // Fetch market data once
-    const { closes, volumes, currentPrice, candles } = await fetchFuturesOHLCV();
+    // Fetch market data once (use live for klines — testnet may not have full data)
+    const { closes, volumes, currentPrice, candles } = await fetchFuturesOHLCV(MEXC_FUTURES_LIVE);
     const rsi = calculateRSI(closes);
     const ema9 = calculateEMA(closes, 9);
     const ema21 = calculateEMA(closes, 21);
