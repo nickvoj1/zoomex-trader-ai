@@ -420,7 +420,7 @@ async function applyAiOverlay(
   if (aiReview.verdict === "veto") {
     return {
       ...decision,
-      action: "hold",
+      action: "hold" as TradeAction,
       reasoning: `${decision.reasoning} · AI vetoed: ${aiReview.reasoning}`,
     };
   }
