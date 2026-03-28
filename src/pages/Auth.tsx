@@ -11,10 +11,16 @@ import { toast } from "sonner";
 import { Zap, Eye, EyeOff } from "lucide-react";
 
 export default function Auth() {
+  const { session } = useAuth();
+  const navigate = useNavigate();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+
+  useEffect(() => {
+    if (session) navigate("/dashboard", { replace: true });
+  }, [session, navigate]);
 
   const handleSignUp = async (e: React.FormEvent) => {
     e.preventDefault();
