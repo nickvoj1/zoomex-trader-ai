@@ -61,6 +61,7 @@ export default function SettingsPage() {
           max_risk_pct: Number(profData.max_risk_pct),
           leverage: profData.leverage,
           telegram_id: profData.telegram_id || "",
+          demo_mode: (profData as any).demo_mode ?? true,
         });
       }
     };
