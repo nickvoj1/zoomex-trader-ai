@@ -424,7 +424,7 @@ Deno.serve(async (req) => {
         const closeSide = positionSide === "long" ? "4" : "2";
         const posVol = positions[0].holdVol?.toString() || "1";
 
-        const orderRes = await submitOrder(keys.mexc_key, keys.mexc_secret, {
+        const orderRes = await submitOrder(baseUrl, keys.mexc_key, keys.mexc_secret, {
           symbol: "BTC_USDT",
           price: currentPrice.toString(),
           vol: posVol,
