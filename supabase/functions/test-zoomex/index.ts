@@ -35,7 +35,7 @@ Deno.serve(async (req) => {
     const preSign = `${timestamp}${keys.zoomex_key}${recvWindow}${params}`;
     const signature = await hmacSHA256(keys.zoomex_secret, preSign);
 
-    const res = await fetch(`https://api.zoomex.com/cloud/trade/v3/account/wallet-balance?${params}`, {
+    const res = await fetch(`https://openapi.zoomex.com/cloud/trade/v3/account/wallet-balance?${params}`, {
       headers: {
         "X-BAPI-API-KEY": keys.zoomex_key,
         "X-BAPI-SIGN": signature,

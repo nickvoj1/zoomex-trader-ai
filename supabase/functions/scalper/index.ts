@@ -151,7 +151,7 @@ function calculateRSI(closes: number[], period = 14): number {
 async function fetchOHLCV(): Promise<{ closes: number[]; currentPrice: number }> {
   // Use Zoomex public kline endpoint (no auth needed) for 1m candles
   const url =
-    "https://api.zoomex.com/cloud/trade/v3/market/kline?category=linear&symbol=BTCUSDT&interval=1&limit=50";
+    "https://openapi.zoomex.com/cloud/trade/v3/market/kline?category=linear&symbol=BTCUSDT&interval=1&limit=50";
   const res = await fetch(url);
   const json = await res.json();
 
