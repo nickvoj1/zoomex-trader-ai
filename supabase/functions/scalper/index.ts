@@ -177,7 +177,7 @@ Current indicators:
 - EMA crossover: ${ema9 > ema21 ? "BULLISH (9 > 21)" : "BEARISH (9 < 21)"}
 - Volume spike: ${volumeSpike ? "YES (2x+ average)" : "NO"}
 - Current price: $${last10[last10.length - 1].close}
-- Has open position: ${hasPosition ? \`YES (\${positionSide})\` : "NO"}
+- Has open position: ${hasPosition ? "YES (" + positionSide + ")" : "NO"}
 
 Last 10 candles (O/H/L/C/Vol):
 ${last10.map(c => `${c.open}/${c.high}/${c.low}/${c.close}/${c.vol}`).join("\n")}
