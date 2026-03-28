@@ -28,6 +28,7 @@ export default function SettingsPage() {
     max_risk_pct: 0.5,
     leverage: 10,
     telegram_id: "",
+    demo_mode: true,
   });
 
   useEffect(() => {
