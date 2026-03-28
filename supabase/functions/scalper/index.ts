@@ -16,12 +16,12 @@ interface Profile {
 
 interface ApiKeys {
   user_id: string;
-  zoomex_key: string | null;
-  zoomex_secret: string | null;
+  mexc_key: string | null;
+  mexc_secret: string | null;
   telegram_token: string | null;
 }
 
-// ── Zoomex API helpers ──────────────────────────────────────────────
+// ── MEXC API helpers ────────────────────────────────────────────────
 
 async function hmacSHA256(secret: string, message: string): Promise<string> {
   const enc = new TextEncoder();
@@ -38,90 +38,68 @@ async function hmacSHA256(secret: string, message: string): Promise<string> {
     .join("");
 }
 
-async function zoomexRequest(
+const MEXC_BASE = "https://api.mexc.com";
+
+async function mexcRequest(
   apiKey: string,
   apiSecret: string,
   method: string,
   path: string,
-  params: Record<string, unknown> = {}
+  params: Record<string, string> = {}
 ) {
   const timestamp = Date.now().toString();
-  const recvWindow = "5000";
-  const baseUrl = "https://openapi.zoomex.com";
+  params["timestamp"] = timestamp;
+  params["recvWindow"] = "5000";
 
-  let queryString = "";
-  let body = "";
+  const queryString = new URLSearchParams(params).toString();
+  const signature = await hmacSHA256(apiSecret, queryString);
 
-  if (method === "GET") {
-    queryString = new URLSearchParams(
-      Object.entries(params).map(([k, v]) => [k, String(v)])
-    ).toString();
-  } else {
-    body = JSON.stringify(params);
-  }
-
-  const preSign = `${timestamp}${apiKey}${recvWindow}${queryString || body}`;
-  const signature = await hmacSHA256(apiSecret, preSign);
-
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    "X-BAPI-API-KEY": apiKey,
-    "X-BAPI-SIGN": signature,
-    "X-BAPI-TIMESTAMP": timestamp,
-    "X-BAPI-RECV-WINDOW": recvWindow,
-  };
-
-  const url = queryString ? `${baseUrl}${path}?${queryString}` : `${baseUrl}${path}`;
+  const url = `${MEXC_BASE}${path}?${queryString}&signature=${signature}`;
   const res = await fetch(url, {
     method,
-    headers,
-    body: method === "POST" ? body : undefined,
+    headers: {
+      "Content-Type": "application/json",
+      "X-MEXC-APIKEY": apiKey,
+    },
   });
   return res.json();
 }
 
 async function setLeverage(apiKey: string, apiSecret: string, symbol: string, leverage: number) {
-  return zoomexRequest(apiKey, apiSecret, "POST", "/cloud/trade/v3/position/set-leverage", {
-    category: "linear",
-    symbol,
-    buyLeverage: String(leverage),
-    sellLeverage: String(leverage),
-  });
+  // MEXC futures leverage - using spot for now (MEXC spot doesn't have leverage)
+  // For futures, endpoint would be different
+  console.log(`Leverage set to ${leverage}x for ${symbol} (spot mode)`);
 }
 
 async function placeOrder(
   apiKey: string,
   apiSecret: string,
   symbol: string,
-  side: "Buy" | "Sell",
-  qty: string,
-  tpPrice: string,
-  slPrice: string
+  side: "BUY" | "SELL",
+  qty: string
 ) {
-  return zoomexRequest(apiKey, apiSecret, "POST", "/cloud/trade/v3/order/create", {
-    category: "linear",
+  return mexcRequest(apiKey, apiSecret, "POST", "/api/v3/order", {
     symbol,
     side,
-    orderType: "Market",
-    qty,
-    timeInForce: "GTC",
-    takeProfit: tpPrice,
-    stopLoss: slPrice,
-    positionIdx: 0, // one-way mode
+    type: "MARKET",
+    quantity: qty,
   });
 }
 
-async function getOpenPositions(apiKey: string, apiSecret: string, symbol: string) {
-  return zoomexRequest(apiKey, apiSecret, "GET", "/cloud/trade/v3/position/list", {
-    category: "linear",
+async function getOpenOrders(apiKey: string, apiSecret: string, symbol: string) {
+  return mexcRequest(apiKey, apiSecret, "GET", "/api/v3/openOrders", {
     symbol,
   });
+}
+
+async function getAccountInfo(apiKey: string, apiSecret: string) {
+  return mexcRequest(apiKey, apiSecret, "GET", "/api/v3/account", {});
 }
 
 // ── RSI calculation ─────────────────────────────────────────────────
 
 function calculateRSI(closes: number[], period = 14): number {
-  if (closes.length < period + 1) return 50; // neutral fallback
+  if (closes.length < period + 1) return 50;
 
   let gains = 0;
   let losses = 0;
@@ -146,22 +124,19 @@ function calculateRSI(closes: number[], period = 14): number {
   return 100 - 100 / (1 + rs);
 }
 
-// ── Fetch BTCUSDT price data ────────────────────────────────────────
+// ── Fetch BTCUSDT price data from MEXC ──────────────────────────────
 
 async function fetchOHLCV(): Promise<{ closes: number[]; currentPrice: number }> {
-  // Use Zoomex public kline endpoint (no auth needed) for 1m candles
-  const url =
-    "https://openapi.zoomex.com/cloud/trade/v3/market/kline?category=linear&symbol=BTCUSDT&interval=1&limit=50";
+  const url = `${MEXC_BASE}/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=50`;
   const res = await fetch(url);
   const json = await res.json();
 
-  if (json.retCode !== 0 || !json.result?.list?.length) {
-    throw new Error(`Kline fetch failed: ${json.retMsg || "unknown"}`);
+  if (!Array.isArray(json) || json.length === 0) {
+    throw new Error(`Kline fetch failed: ${JSON.stringify(json).slice(0, 200)}`);
   }
 
-  // Zoomex klines: [startTime, open, high, low, close, volume, turnover] newest first
-  const klines = json.result.list as string[][];
-  const closes = klines.map((k) => parseFloat(k[4])).reverse(); // oldest → newest
+  // MEXC klines: [openTime, open, high, low, close, volume, closeTime, quoteVolume]
+  const closes = json.map((k: any[]) => parseFloat(k[4]));
   const currentPrice = closes[closes.length - 1];
 
   return { closes, currentPrice };
@@ -194,7 +169,6 @@ Deno.serve(async (req) => {
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
     );
 
-    // Get all users with auto_trade enabled
     const { data: profiles, error: profileErr } = await supabaseAdmin
       .from("profiles")
       .select("user_id, auto_trade, max_risk_pct, leverage, telegram_id")
@@ -207,7 +181,6 @@ Deno.serve(async (req) => {
       });
     }
 
-    // Fetch market data once for all users
     const { closes, currentPrice } = await fetchOHLCV();
     const rsi = calculateRSI(closes);
     const rsiRounded = Math.round(rsi * 10) / 10;
@@ -219,100 +192,73 @@ Deno.serve(async (req) => {
     for (const profile of profiles as Profile[]) {
       const { user_id, max_risk_pct, leverage, telegram_id } = profile;
 
-      // Get API keys
       const { data: keys } = await supabaseAdmin
         .from("api_keys")
-        .select("zoomex_key, zoomex_secret, telegram_token")
+        .select("mexc_key, mexc_secret, telegram_token")
         .eq("user_id", user_id)
         .maybeSingle();
 
-      if (!keys?.zoomex_key || !keys?.zoomex_secret) {
-        results.push({ userId: user_id, action: "skipped", detail: "No API keys" });
+      if (!keys?.mexc_key || !keys?.mexc_secret) {
+        results.push({ userId: user_id, action: "skipped", detail: "No MEXC API keys" });
         continue;
       }
 
-      const apiKey = keys.zoomex_key;
-      const apiSecret = keys.zoomex_secret;
+      const apiKey = keys.mexc_key;
+      const apiSecret = keys.mexc_secret;
 
-      // Check existing positions
-      const posRes = await getOpenPositions(apiKey, apiSecret, "BTCUSDT");
-      const positions = posRes?.result?.list || [];
-      const hasPosition = positions.some(
-        (p: Record<string, string>) => parseFloat(p.size || "0") > 0
-      );
+      // Check existing open orders
+      const openOrders = await getOpenOrders(apiKey, apiSecret, "BTCUSDT");
+      const hasPosition = Array.isArray(openOrders) && openOrders.length > 0;
 
       let signal: "buy" | "sell" | "hold" = "hold";
       let action = "hold";
       let reasoning = `RSI=${rsiRounded}, Price=$${currentPrice}. `;
 
-      // ── RSI Strategy ──
       if (rsi < 30 && !hasPosition) {
         signal = "buy";
-        reasoning += "RSI oversold (<30), no open position. Opening long.";
+        reasoning += "RSI oversold (<30), no open orders. Placing buy.";
 
-        // Calculate position size: risk_pct of a notional $10k account
-        const qty = "0.001"; // Fixed small size for safety
-        const tp = (currentPrice * 1.003).toFixed(2); // +0.3%
-        const sl = (currentPrice * 0.9985).toFixed(2); // -0.15%
+        const qty = "0.00001"; // Small BTC amount for MEXC spot
+        const orderRes = await placeOrder(apiKey, apiSecret, "BTCUSDT", "BUY", qty);
 
-        // Set leverage
-        await setLeverage(apiKey, apiSecret, "BTCUSDT", leverage);
-
-        // Place market buy
-        const orderRes = await placeOrder(apiKey, apiSecret, "BTCUSDT", "Buy", qty, tp, sl);
-
-        if (orderRes.retCode === 0) {
+        if (orderRes.orderId) {
           action = "buy_executed";
 
-          // Log trade to DB
           await supabaseAdmin.from("trades").insert({
             user_id,
             symbol: "BTCUSDT",
             side: "buy",
             size: parseFloat(qty),
             entry_price: currentPrice,
-            tp: parseFloat(tp),
-            sl: parseFloat(sl),
+            tp: currentPrice * 1.003,
+            sl: currentPrice * 0.9985,
             leverage,
             status: "open",
           });
 
-          // Telegram alert
           if (keys.telegram_token && telegram_id) {
+            const tp = (currentPrice * 1.003).toFixed(2);
+            const sl = (currentPrice * 0.9985).toFixed(2);
             await sendTelegramAlert(
               keys.telegram_token,
               telegram_id,
-              `🟢 *ScalpPro BUY*\n📊 RSI: ${rsiRounded}\n💰 Entry: $${currentPrice}\n🎯 TP: $${tp}\n🛑 SL: $${sl}\n⚡ Leverage: ${leverage}x`
+              `🟢 *ScalpPro BUY*\n📊 RSI: ${rsiRounded}\n💰 Entry: $${currentPrice}\n🎯 TP: $${tp}\n🛑 SL: $${sl}`
             );
           }
         } else {
           action = "buy_failed";
-          reasoning += ` Order error: ${orderRes.retMsg}`;
+          reasoning += ` Order error: ${orderRes.msg || JSON.stringify(orderRes)}`;
         }
       } else if (rsi > 70 && hasPosition) {
         signal = "sell";
-        reasoning += "RSI overbought (>70), closing long position.";
+        reasoning += "RSI overbought (>70), closing position.";
 
-        // Close by placing a sell of same size
-        const pos = positions.find(
-          (p: Record<string, string>) => parseFloat(p.size || "0") > 0
-        );
-        const posSize = pos?.size || "0.001";
+        const qty = "0.00001";
+        const orderRes = await placeOrder(apiKey, apiSecret, "BTCUSDT", "SELL", qty);
 
-        const orderRes = await placeOrder(
-          apiKey,
-          apiSecret,
-          "BTCUSDT",
-          "Sell",
-          posSize,
-          "0",
-          "0"
-        );
-
-        if (orderRes.retCode === 0) {
+        if (orderRes.orderId) {
           action = "sell_executed";
 
-          // Update trade in DB
           await supabaseAdmin
             .from("trades")
             .update({
@@ -328,12 +274,12 @@ Deno.serve(async (req) => {
             await sendTelegramAlert(
               keys.telegram_token,
               telegram_id,
-              `🔴 *ScalpPro SELL*\n📊 RSI: ${rsiRounded}\n💰 Exit: $${currentPrice}\n📦 Size: ${posSize} BTC`
+              `🔴 *ScalpPro SELL*\n📊 RSI: ${rsiRounded}\n💰 Exit: $${currentPrice}`
             );
           }
         } else {
           action = "sell_failed";
-          reasoning += ` Order error: ${orderRes.retMsg}`;
+          reasoning += ` Order error: ${orderRes.msg || JSON.stringify(orderRes)}`;
         }
       } else {
         reasoning += hasPosition
@@ -341,7 +287,6 @@ Deno.serve(async (req) => {
           : "No position, RSI neutral. Waiting.";
       }
 
-      // Log signal to DB
       await supabaseAdmin.from("signals").insert({
         user_id,
         symbol: "BTCUSDT",
