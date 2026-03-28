@@ -399,45 +399,19 @@ Deno.serve(async (req) => {
           continue;
         }
 
-        // Get account balance for dynamic sizing
-        const assets = await getAccountAssets(baseUrl, keys.mexc_key, keys.mexc_secret);
-        const usdtBalance = assets?.data?.find?.((a: any) => a.currency === "USDT");
-        const availableBalance = Number(usdtBalance?.availableBalance || 0);
-
-        if (availableBalance < 1) {
-          results.push({ userId: user_id, action: "skipped", detail: `Insufficient balance: $${availableBalance}` });
-          continue;
-        }
-
-        // Position sizing: (balance * risk%) / price * leverage
-        // Each contract = 0.0001 BTC
-        const riskAmount = availableBalance * (riskPct / 100);
-        const contractValue = 0.0001 * currentPrice;
-        const contracts = Math.max(1, Math.floor((riskAmount * lev) / contractValue));
-
-        // TP/SL
-        const tpPct = 0.003; // 0.3%
-        const slPct = 0.0015; // 0.15%
         const isLong = aiDecision.action === "long";
+        const tpPct = 0.003;
+        const slPct = 0.0015;
         const tp = isLong ? currentPrice * (1 + tpPct) : currentPrice * (1 - tpPct);
         const sl = isLong ? currentPrice * (1 - slPct) : currentPrice * (1 + slPct);
 
-        // side: 1=open long, 3=open short
-        const side = isLong ? "1" : "3";
+        if (demo_mode) {
+          // ── PAPER TRADE: simulate order, record in DB ──
+          const demoBalance = 10000; // virtual $10k balance
+          const riskAmount = demoBalance * (riskPct / 100);
+          const contractValue = 0.0001 * currentPrice;
+          const contracts = Math.max(1, Math.floor((riskAmount * lev) / contractValue));
 
-        const orderRes = await submitOrder(baseUrl, keys.mexc_key, keys.mexc_secret, {
-          symbol: "BTC_USDT",
-          price: currentPrice.toString(),
-          vol: contracts.toString(),
-          side,
-          type: "5", // market
-          openType: "1", // isolated
-          leverage: lev.toString(),
-          takeProfitPrice: tp.toFixed(2),
-          stopLossPrice: sl.toFixed(2),
-        });
-
-        if (orderRes?.data) {
           await supabaseAdmin.from("trades").insert({
             user_id,
             symbol: "BTCUSDT",
@@ -450,53 +424,143 @@ Deno.serve(async (req) => {
             status: "open",
           });
 
+          console.log(`User ${user_id}: DEMO ${aiDecision.action} executed — ${contracts} contracts @ $${currentPrice}`);
+
           if (keys.telegram_token && telegram_id) {
-            await sendTelegramAlert(
-              keys.telegram_token, telegram_id,
-              `${isLong ? "🟢 LONG" : "🔴 SHORT"} *ScalpPro*\n📊 RSI: ${rsi.toFixed(1)} | EMA: ${currentEma9 > currentEma21 ? "Bull" : "Bear"}\n💰 Entry: $${currentPrice}\n🎯 TP: $${tp.toFixed(2)}\n🛑 SL: $${sl.toFixed(2)}\n📐 ${contracts} contracts @ ${lev}x\n🤖 AI: ${aiDecision.reasoning}`
-            );
+            await sendTelegramAlert(keys.telegram_token, telegram_id,
+              `📝 DEMO ${isLong ? "🟢 LONG" : "🔴 SHORT"} *ScalpPro*\n💰 Entry: $${currentPrice}\n🎯 TP: $${tp.toFixed(2)}\n🛑 SL: $${sl.toFixed(2)}\n📐 ${contracts} contracts @ ${lev}x\n🤖 AI: ${aiDecision.reasoning}`);
           }
 
-          results.push({ userId: user_id, action: `${aiDecision.action}_executed`, detail: `${contracts} contracts @ $${currentPrice}` });
+          results.push({ userId: user_id, action: `demo_${aiDecision.action}_executed`, detail: `${contracts} contracts @ $${currentPrice}` });
         } else {
-          results.push({ userId: user_id, action: `${aiDecision.action}_failed`, detail: JSON.stringify(orderRes).slice(0, 200) });
+          // ── LIVE TRADE ──
+          const assets = await getAccountAssets(baseUrl, keys.mexc_key, keys.mexc_secret);
+          const usdtBalance = assets?.data?.find?.((a: any) => a.currency === "USDT");
+          const availableBalance = Number(usdtBalance?.availableBalance || 0);
+
+          if (availableBalance < 1) {
+            results.push({ userId: user_id, action: "skipped", detail: `Insufficient balance: $${availableBalance}` });
+            continue;
+          }
+
+          const riskAmount = availableBalance * (riskPct / 100);
+          const contractValue = 0.0001 * currentPrice;
+          const contracts = Math.max(1, Math.floor((riskAmount * lev) / contractValue));
+          const side = isLong ? "1" : "3";
+
+          const orderRes = await submitOrder(baseUrl, keys.mexc_key, keys.mexc_secret, {
+            symbol: "BTC_USDT",
+            price: currentPrice.toString(),
+            vol: contracts.toString(),
+            side,
+            type: "5",
+            openType: "1",
+            leverage: lev.toString(),
+            takeProfitPrice: tp.toFixed(2),
+            stopLossPrice: sl.toFixed(2),
+          });
+
+          if (orderRes?.data) {
+            await supabaseAdmin.from("trades").insert({
+              user_id, symbol: "BTCUSDT",
+              side: isLong ? "buy" : "sell",
+              size: contracts * 0.0001,
+              entry_price: currentPrice, tp, sl,
+              leverage: lev, status: "open",
+            });
+
+            if (keys.telegram_token && telegram_id) {
+              await sendTelegramAlert(keys.telegram_token, telegram_id,
+                `${isLong ? "🟢 LONG" : "🔴 SHORT"} *ScalpPro*\n📊 RSI: ${rsi.toFixed(1)} | EMA: ${currentEma9 > currentEma21 ? "Bull" : "Bear"}\n💰 Entry: $${currentPrice}\n🎯 TP: $${tp.toFixed(2)}\n🛑 SL: $${sl.toFixed(2)}\n📐 ${contracts} contracts @ ${lev}x\n🤖 AI: ${aiDecision.reasoning}`);
+            }
+            results.push({ userId: user_id, action: `${aiDecision.action}_executed`, detail: `${contracts} contracts @ $${currentPrice}` });
+          } else {
+            results.push({ userId: user_id, action: `${aiDecision.action}_failed`, detail: JSON.stringify(orderRes).slice(0, 200) });
+          }
         }
       } else if (aiDecision.action === "close" && hasPosition) {
-        // Close position: side 4=close long, 2=close short
-        const closeSide = positionSide === "long" ? "4" : "2";
-        const posVol = positions[0].holdVol?.toString() || "1";
+        if (demo_mode) {
+          // ── DEMO CLOSE: calculate PnL and close in DB ──
+          if (dbOpenTrade) {
+            const entryPrice = Number(dbOpenTrade.entry_price);
+            const size = Number(dbOpenTrade.size);
+            const tradeLev = Number(dbOpenTrade.leverage);
+            const isLongPos = dbOpenTrade.side === "buy";
+            const priceDiff = isLongPos ? (currentPrice - entryPrice) : (entryPrice - currentPrice);
+            const pnl = (priceDiff / entryPrice) * size * currentPrice * tradeLev;
 
-        const orderRes = await submitOrder(baseUrl, keys.mexc_key, keys.mexc_secret, {
-          symbol: "BTC_USDT",
-          price: currentPrice.toString(),
-          vol: posVol,
-          side: closeSide,
-          type: "5",
-          openType: "1",
-          leverage: lev.toString(),
-        });
+            await supabaseAdmin.from("trades")
+              .update({ status: "closed", exit_price: currentPrice, pnl: Math.round(pnl * 100) / 100, closed_at: new Date().toISOString() })
+              .eq("id", dbOpenTrade.id);
 
-        if (orderRes?.data) {
-          await supabaseAdmin
-            .from("trades")
-            .update({ status: "closed", exit_price: currentPrice, closed_at: new Date().toISOString() })
-            .eq("user_id", user_id)
-            .eq("status", "open")
-            .eq("symbol", "BTCUSDT");
+            console.log(`User ${user_id}: DEMO close — PnL: $${pnl.toFixed(2)}`);
 
-          if (keys.telegram_token && telegram_id) {
-            await sendTelegramAlert(
-              keys.telegram_token, telegram_id,
-              `⬜ *CLOSE* ScalpPro\n💰 Exit: $${currentPrice}\n🤖 AI: ${aiDecision.reasoning}`
-            );
+            if (keys.telegram_token && telegram_id) {
+              await sendTelegramAlert(keys.telegram_token, telegram_id,
+                `📝 DEMO ⬜ *CLOSE* ScalpPro\n💰 Exit: $${currentPrice}\n${pnl >= 0 ? "✅" : "❌"} PnL: $${pnl.toFixed(2)}\n🤖 AI: ${aiDecision.reasoning}`);
+            }
+            results.push({ userId: user_id, action: "demo_close_executed", detail: `Closed at $${currentPrice}, PnL: $${pnl.toFixed(2)}` });
           }
-
-          results.push({ userId: user_id, action: "close_executed", detail: `Closed at $${currentPrice}` });
         } else {
-          results.push({ userId: user_id, action: "close_failed", detail: JSON.stringify(orderRes).slice(0, 200) });
+          // ── LIVE CLOSE ──
+          const posData = await getOpenPositions(baseUrl, keys.mexc_key, keys.mexc_secret, "BTC_USDT");
+          const positions = posData?.data || [];
+          const closeSide = positionSide === "long" ? "4" : "2";
+          const posVol = positions[0]?.holdVol?.toString() || "1";
+
+          const orderRes = await submitOrder(baseUrl, keys.mexc_key, keys.mexc_secret, {
+            symbol: "BTC_USDT",
+            price: currentPrice.toString(),
+            vol: posVol,
+            side: closeSide,
+            type: "5",
+            openType: "1",
+            leverage: lev.toString(),
+          });
+
+          if (orderRes?.data) {
+            await supabaseAdmin.from("trades")
+              .update({ status: "closed", exit_price: currentPrice, closed_at: new Date().toISOString() })
+              .eq("user_id", user_id).eq("status", "open").eq("symbol", "BTCUSDT");
+
+            if (keys.telegram_token && telegram_id) {
+              await sendTelegramAlert(keys.telegram_token, telegram_id,
+                `⬜ *CLOSE* ScalpPro\n💰 Exit: $${currentPrice}\n🤖 AI: ${aiDecision.reasoning}`);
+            }
+            results.push({ userId: user_id, action: "close_executed", detail: `Closed at $${currentPrice}` });
+          } else {
+            results.push({ userId: user_id, action: "close_failed", detail: JSON.stringify(orderRes).slice(0, 200) });
+          }
         }
       } else {
-        results.push({ userId: user_id, action: "hold", detail: aiDecision.reasoning });
+        // Demo mode: auto-close if TP/SL hit
+        if (demo_mode && hasPosition && dbOpenTrade) {
+          const entryPrice = Number(dbOpenTrade.entry_price);
+          const tpPrice = Number(dbOpenTrade.tp);
+          const slPrice = Number(dbOpenTrade.sl);
+          const isLongPos = dbOpenTrade.side === "buy";
+          const hitTp = isLongPos ? currentPrice >= tpPrice : currentPrice <= tpPrice;
+          const hitSl = isLongPos ? currentPrice <= slPrice : currentPrice >= slPrice;
+
+          if (hitTp || hitSl) {
+            const exitPrice = hitTp ? tpPrice : slPrice;
+            const size = Number(dbOpenTrade.size);
+            const tradeLev = Number(dbOpenTrade.leverage);
+            const priceDiff = isLongPos ? (exitPrice - entryPrice) : (entryPrice - exitPrice);
+            const pnl = (priceDiff / entryPrice) * size * exitPrice * tradeLev;
+
+            await supabaseAdmin.from("trades")
+              .update({ status: "closed", exit_price: exitPrice, pnl: Math.round(pnl * 100) / 100, closed_at: new Date().toISOString() })
+              .eq("id", dbOpenTrade.id);
+
+            console.log(`User ${user_id}: DEMO auto-${hitTp ? "TP" : "SL"} hit — PnL: $${pnl.toFixed(2)}`);
+            results.push({ userId: user_id, action: `demo_${hitTp ? "tp" : "sl"}_hit`, detail: `PnL: $${pnl.toFixed(2)}` });
+          } else {
+            results.push({ userId: user_id, action: "hold", detail: aiDecision.reasoning });
+          }
+        } else {
+          results.push({ userId: user_id, action: "hold", detail: aiDecision.reasoning });
+        }
       }
     }
 
