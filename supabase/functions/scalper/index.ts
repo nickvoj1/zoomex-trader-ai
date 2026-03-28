@@ -23,15 +23,15 @@ async function hmacSHA256(secret: string, message: string): Promise<string> {
 
 // ── MEXC Futures API helpers ────────────────────────────────────────
 
-async function mexcFuturesGet(path: string, params: Record<string, string> = {}) {
+async function mexcFuturesGet(baseUrl: string, path: string, params: Record<string, string> = {}) {
   const qs = new URLSearchParams(params).toString();
-  const url = `${MEXC_FUTURES}${path}${qs ? "?" + qs : ""}`;
+  const url = `${baseUrl}${path}${qs ? "?" + qs : ""}`;
   const res = await fetch(url);
   return res.json();
 }
 
 async function mexcFuturesPrivate(
-  apiKey: string, apiSecret: string,
+  baseUrl: string, apiKey: string, apiSecret: string,
   method: string, path: string,
   params: Record<string, string> = {}
 ) {
@@ -40,7 +40,7 @@ async function mexcFuturesPrivate(
   const paramStr = Object.keys(params).sort().map(k => `${k}=${params[k]}`).join("&");
   const signature = await hmacSHA256(apiSecret, paramStr);
 
-  const url = `${MEXC_FUTURES}${path}`;
+  const url = `${baseUrl}${path}`;
   const body = paramStr + "&signature=" + signature;
 
   const res = await fetch(url, {
@@ -54,12 +54,12 @@ async function mexcFuturesPrivate(
   return res.json();
 }
 
-async function getAccountAssets(apiKey: string, apiSecret: string) {
-  return mexcFuturesPrivate(apiKey, apiSecret, "GET", "/api/v1/private/account/assets");
+async function getAccountAssets(baseUrl: string, apiKey: string, apiSecret: string) {
+  return mexcFuturesPrivate(baseUrl, apiKey, apiSecret, "GET", "/api/v1/private/account/assets");
 }
 
-async function getOpenPositions(apiKey: string, apiSecret: string, symbol: string) {
-  return mexcFuturesPrivate(apiKey, apiSecret, "GET", "/api/v1/private/position/open_positions", { symbol });
+async function getOpenPositions(baseUrl: string, apiKey: string, apiSecret: string, symbol: string) {
+  return mexcFuturesPrivate(baseUrl, apiKey, apiSecret, "GET", "/api/v1/private/position/open_positions", { symbol });
 }
 
 async function submitOrder(
