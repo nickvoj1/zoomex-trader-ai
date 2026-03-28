@@ -123,20 +123,42 @@ async function fetchFuturesOHLCV(baseUrl: string): Promise<{
     limit: "50",
   });
 
-  if (!data?.data || !Array.isArray(data.data)) {
+  const d = data?.data;
+  if (!d) {
     throw new Error(`Kline fetch failed: ${JSON.stringify(data).slice(0, 300)}`);
   }
 
-  const candles = data.data.map((k: any) => ({
-    open: Number(k.open),
-    high: Number(k.high),
-    low: Number(k.low),
-    close: Number(k.close),
-    vol: Number(k.vol),
-  }));
+  // MEXC Futures klines return separate arrays: data.time[], data.open[], data.close[], etc.
+  // OR an array of candle objects — handle both formats
+  let candles: Array<{ open: number; high: number; low: number; close: number; vol: number }>;
 
-  const closes = candles.map((c: any) => c.close);
-  const volumes = candles.map((c: any) => c.vol);
+  if (Array.isArray(d)) {
+    // Array of candle objects
+    candles = d.map((k: any) => ({
+      open: Number(k.open), high: Number(k.high),
+      low: Number(k.low), close: Number(k.close), vol: Number(k.vol),
+    }));
+  } else if (d.close && Array.isArray(d.close)) {
+    // Separate arrays format
+    const len = d.close.length;
+    candles = [];
+    for (let i = 0; i < len; i++) {
+      candles.push({
+        open: Number(d.open[i]), high: Number(d.high[i]),
+        low: Number(d.low[i]), close: Number(d.close[i]),
+        vol: Number(d.vol?.[i] || d.volume?.[i] || 0),
+      });
+    }
+  } else {
+    throw new Error(`Unexpected kline format: ${JSON.stringify(d).slice(0, 300)}`);
+  }
+
+  if (candles.length === 0) {
+    throw new Error("No kline data returned");
+  }
+
+  const closes = candles.map(c => c.close);
+  const volumes = candles.map(c => c.vol);
   const currentPrice = closes[closes.length - 1];
 
   return { closes, volumes, currentPrice, candles };
