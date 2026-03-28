@@ -316,11 +316,30 @@ Deno.serve(async (req) => {
         continue;
       }
 
-      // Check open positions
-      const posData = await getOpenPositions(baseUrl, keys.mexc_key, keys.mexc_secret, "BTC_USDT");
-      const positions = posData?.data || [];
-      const hasPosition = Array.isArray(positions) && positions.length > 0;
-      const positionSide = hasPosition ? (positions[0].positionType === 1 ? "long" : "short") : null;
+      // Check open positions — in demo mode, check DB instead of MEXC API
+      let hasPosition = false;
+      let positionSide: string | null = null;
+      let dbOpenTrade: any = null;
+
+      if (demo_mode) {
+        const { data: openTrades } = await supabaseAdmin
+          .from("trades")
+          .select("*")
+          .eq("user_id", user_id)
+          .eq("status", "open")
+          .eq("symbol", "BTCUSDT")
+          .limit(1);
+        if (openTrades && openTrades.length > 0) {
+          hasPosition = true;
+          dbOpenTrade = openTrades[0];
+          positionSide = dbOpenTrade.side === "buy" ? "long" : "short";
+        }
+      } else {
+        const posData = await getOpenPositions(baseUrl, keys.mexc_key, keys.mexc_secret, "BTC_USDT");
+        const positions = posData?.data || [];
+        hasPosition = Array.isArray(positions) && positions.length > 0;
+        positionSide = hasPosition ? (positions[0].positionType === 1 ? "long" : "short") : null;
+      }
 
       let aiDecision = { action: "hold", confidence: 0, reasoning: "No OpenAI key" };
 
