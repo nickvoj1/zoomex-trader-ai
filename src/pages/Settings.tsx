@@ -118,8 +118,8 @@ export default function SettingsPage() {
         </CardHeader>
         <CardContent className="space-y-4">
           {[
-            { key: "zoomex_key", label: "Zoomex API Key" },
-            { key: "zoomex_secret", label: "Zoomex Secret" },
+            { key: "mexc_key", label: "MEXC API Key" },
+            { key: "mexc_secret", label: "MEXC Secret" },
             { key: "coincodex_key", label: "CoinCodex API Key" },
             { key: "openai_key", label: "OpenAI API Key" },
             { key: "telegram_token", label: "Telegram Bot Token" },
