@@ -358,7 +358,7 @@ Deno.serve(async (req) => {
         }
 
         // Get account balance for dynamic sizing
-        const assets = await getAccountAssets(keys.mexc_key, keys.mexc_secret);
+        const assets = await getAccountAssets(baseUrl, keys.mexc_key, keys.mexc_secret);
         const usdtBalance = assets?.data?.find?.((a: any) => a.currency === "USDT");
         const availableBalance = Number(usdtBalance?.availableBalance || 0);
 
