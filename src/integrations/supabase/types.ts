@@ -86,6 +86,81 @@ export type Database = {
         }
         Relationships: []
       }
+      forward_validation_reports: {
+        Row: {
+          avg_entry_slippage_bps: number
+          avg_exit_slippage_bps: number
+          avg_holding_minutes: number
+          avg_net_edge_usd: number
+          created_at: string
+          details: Json
+          execution_mode: string
+          expectancy_usd: number
+          gate_passed: boolean
+          gate_reason: string | null
+          id: string
+          max_drawdown_pct: number
+          model_assisted_trade_count: number
+          profit_factor: number
+          symbol: string
+          total_fees_usd: number
+          total_net_pnl_usd: number
+          trade_count: number
+          user_id: string | null
+          win_rate: number
+          window_end: string
+          window_start: string
+        }
+        Insert: {
+          avg_entry_slippage_bps?: number
+          avg_exit_slippage_bps?: number
+          avg_holding_minutes?: number
+          avg_net_edge_usd?: number
+          created_at?: string
+          details?: Json
+          execution_mode: string
+          expectancy_usd?: number
+          gate_passed?: boolean
+          gate_reason?: string | null
+          id?: string
+          max_drawdown_pct?: number
+          model_assisted_trade_count?: number
+          profit_factor?: number
+          symbol?: string
+          total_fees_usd?: number
+          total_net_pnl_usd?: number
+          trade_count?: number
+          user_id?: string | null
+          win_rate?: number
+          window_end: string
+          window_start: string
+        }
+        Update: {
+          avg_entry_slippage_bps?: number
+          avg_exit_slippage_bps?: number
+          avg_holding_minutes?: number
+          avg_net_edge_usd?: number
+          created_at?: string
+          details?: Json
+          execution_mode?: string
+          expectancy_usd?: number
+          gate_passed?: boolean
+          gate_reason?: string | null
+          id?: string
+          max_drawdown_pct?: number
+          model_assisted_trade_count?: number
+          profit_factor?: number
+          symbol?: string
+          total_fees_usd?: number
+          total_net_pnl_usd?: number
+          trade_count?: number
+          user_id?: string | null
+          win_rate?: number
+          window_end?: string
+          window_start?: string
+        }
+        Relationships: []
+      }
       market_snapshots: {
         Row: {
           created_at: string
@@ -201,6 +276,57 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      orderbook_snapshots: {
+        Row: {
+          asks: Json
+          best_ask: number | null
+          best_bid: number | null
+          bids: Json
+          created_at: string
+          depth_limit: number
+          exchange_timestamp: string | null
+          id: string
+          imbalance: number | null
+          latency_ms: number | null
+          raw_payload: Json | null
+          spread_bps: number | null
+          symbol: string
+          venue: string
+        }
+        Insert: {
+          asks?: Json
+          best_ask?: number | null
+          best_bid?: number | null
+          bids?: Json
+          created_at?: string
+          depth_limit?: number
+          exchange_timestamp?: string | null
+          id?: string
+          imbalance?: number | null
+          latency_ms?: number | null
+          raw_payload?: Json | null
+          spread_bps?: number | null
+          symbol?: string
+          venue: string
+        }
+        Update: {
+          asks?: Json
+          best_ask?: number | null
+          best_bid?: number | null
+          bids?: Json
+          created_at?: string
+          depth_limit?: number
+          exchange_timestamp?: string | null
+          id?: string
+          imbalance?: number | null
+          latency_ms?: number | null
+          raw_payload?: Json | null
+          spread_bps?: number | null
+          symbol?: string
+          venue?: string
+        }
+        Relationships: []
       }
       position_reconciliations: {
         Row: {
@@ -425,6 +551,48 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      trade_ticks: {
+        Row: {
+          created_at: string
+          exchange_timestamp: string | null
+          exchange_trade_id: string | null
+          id: string
+          notional_usd: number | null
+          price: number
+          raw_payload: Json | null
+          side: string | null
+          size: number
+          symbol: string
+          venue: string
+        }
+        Insert: {
+          created_at?: string
+          exchange_timestamp?: string | null
+          exchange_trade_id?: string | null
+          id?: string
+          notional_usd?: number | null
+          price: number
+          raw_payload?: Json | null
+          side?: string | null
+          size: number
+          symbol?: string
+          venue: string
+        }
+        Update: {
+          created_at?: string
+          exchange_timestamp?: string | null
+          exchange_trade_id?: string | null
+          id?: string
+          notional_usd?: number | null
+          price?: number
+          raw_payload?: Json | null
+          side?: string | null
+          size?: number
+          symbol?: string
+          venue?: string
+        }
+        Relationships: []
       }
       trades: {
         Row: {
