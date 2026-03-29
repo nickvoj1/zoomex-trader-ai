@@ -9,6 +9,7 @@ import {
   simulateStrategy,
   StrategyDecision,
   StrategySettings,
+  StrategySetup,
 } from "./strategy-core.ts";
 
 export type SweepObjective =
@@ -84,10 +85,16 @@ export interface WalkForwardResult {
 export interface TrainingExample {
   timestamp: number | null;
   regime: RegimeKind;
+  regimeSegment: string;
+  sessionBucket: "asia" | "europe" | "us" | "offhours";
+  volatilityBucket: "compressed" | "normal" | "expanded";
   decision: StrategyDecision;
   futureReturnPct: number;
+  netFutureReturnPct: number;
   futureMaxUpPct: number;
   futureMaxDownPct: number;
+  dynamicMoveThresholdPct: number;
+  adverseAllowancePct: number;
   labelLong: number;
   labelShort: number;
   featureMap: Record<string, number>;
@@ -122,6 +129,52 @@ export interface DatasetSplitMetrics {
   test: BinaryClassificationMetrics;
 }
 
+export interface SegmentClassificationMetrics extends BinaryClassificationMetrics {
+  samples: number;
+  labelRate: number;
+  avgFutureReturnPct: number;
+  avgNetFutureReturnPct: number;
+  avgOpportunityPct: number;
+  avgAdversePct: number;
+  avgProbability: number;
+}
+
+export interface DatasetProfile {
+  totalExamples: number;
+  trainExamples: number;
+  validationExamples: number;
+  testExamples: number;
+  positiveRate: number;
+  coverageDays: number;
+  avgFutureReturnPct: number;
+  avgNetFutureReturnPct: number;
+  avgMoveThresholdPct: number;
+  avgAdverseAllowancePct: number;
+  regimeCounts: Record<string, number>;
+  sessionCounts: Record<string, number>;
+  volatilityCounts: Record<string, number>;
+}
+
+export interface RegimeMetricsBySplit {
+  validation: Record<string, SegmentClassificationMetrics>;
+  test: Record<string, SegmentClassificationMetrics>;
+}
+
+export interface ModelEligibility {
+  approved: boolean;
+  score: number;
+  reasons: string[];
+  thresholds: {
+    minimumExamples: number;
+    minValidationPrecision: number;
+    minTestPrecision: number;
+    maxValidationBrier: number;
+    maxTestBrier: number;
+    maxOverfitGap: number;
+    minRobustSegments: number;
+  };
+}
+
 export interface LogisticModelArtifact {
   side: "long" | "short";
   horizonBars: number;
@@ -136,6 +189,9 @@ export interface LogisticModelArtifact {
   learningRate: number;
   regularization: number;
   metrics: DatasetSplitMetrics;
+  dataset: DatasetProfile;
+  regimeMetrics: RegimeMetricsBySplit;
+  eligibility: ModelEligibility;
 }
 
 export interface TrainLogisticOptions {
@@ -175,6 +231,13 @@ function averageDefined(values: Array<number | null | undefined>) {
   return filtered.length === 0 ? 0 : average(filtered);
 }
 
+function countBy(values: string[]) {
+  return values.reduce<Record<string, number>>((accumulator, value) => {
+    accumulator[value] = (accumulator[value] ?? 0) + 1;
+    return accumulator;
+  }, {});
+}
+
 function safeLog10(value: number | null | undefined) {
   const numeric = finiteNumber(value);
   return numeric === null || numeric <= 0 ? 0 : Math.log10(numeric + 1);
@@ -184,6 +247,29 @@ function sigmoid(value: number) {
   if (value < -35) return 0;
   if (value > 35) return 1;
   return 1 / (1 + Math.exp(-value));
+}
+
+function deriveSessionBucket(hourUtc: number) {
+  if (hourUtc >= 0 && hourUtc < 7) return "asia" as const;
+  if (hourUtc >= 7 && hourUtc < 13) return "europe" as const;
+  if (hourUtc >= 13 && hourUtc < 21) return "us" as const;
+  return "offhours" as const;
+}
+
+function deriveVolatilityBucket(tf1AtrPct: number, tf15RealizedVolPct: number) {
+  const combined = tf1AtrPct + tf15RealizedVolPct * 0.35;
+  if (combined < 0.35) return "compressed" as const;
+  if (combined > 0.95) return "expanded" as const;
+  return "normal" as const;
+}
+
+function buildRegimeSegment(
+  regime: RegimeKind,
+  sessionBucket: ReturnType<typeof deriveSessionBucket>,
+  volatilityBucket: ReturnType<typeof deriveVolatilityBucket>,
+  setupType: StrategySetup,
+) {
+  return `${regime}|${setupType}|${sessionBucket}|${volatilityBucket}`;
 }
 
 function cartesianProduct(inputs: Array<Array<number | boolean>>): Array<Array<number | boolean>> {
@@ -510,6 +596,10 @@ export const TRAINING_FEATURE_NAMES = [
   "wick_bullish",
   "wick_bearish",
   "hour_utc",
+  "session_asia",
+  "session_europe",
+  "session_us",
+  "session_offhours",
   "decision_confidence",
   "decision_risk_reward",
   "decision_is_long",
@@ -520,10 +610,16 @@ export const TRAINING_FEATURE_NAMES = [
   "quality_setup",
   "quality_execution",
   "quality_composite",
+  "quality_confidence_gap",
   "expected_cost_bps",
+  "expected_edge_bps",
   "edge_to_cost_ratio",
   "risk_multiplier",
   "leverage_multiplier",
+  "regime_strength",
+  "trend_hierarchy",
+  "mean_reversion_stretch",
+  "structure_pressure",
   "micro_has_snapshot",
   "micro_snapshot_count",
   "micro_primary_spread_bps",
@@ -550,6 +646,10 @@ export const TRAINING_FEATURE_NAMES = [
   "micro_crowding_mean",
   "micro_pressure_alignment",
   "micro_pressure_trend",
+  "micro_pressure_divergence",
+  "micro_oi_crowding_interaction",
+  "micro_basis_taker_alignment",
+  "micro_liquidation_pressure_change",
   "micro_crowding_change",
   "micro_spread_change_bps",
   "micro_basis_change_bps",
@@ -579,11 +679,26 @@ export function extractFeatureMap(
   const tf1 = state.timeframe1m;
   const tf5 = state.timeframe5m;
   const tf15 = state.timeframe15m;
+  const sessionBucket = deriveSessionBucket(state.latestHourUtc ?? 0);
   const featureValue = (key: string) => {
     const value = decision.features[key];
     return typeof value === "number" && Number.isFinite(value) ? value : 0;
   };
   const microFeatures = extractMicrostructureFeatures(microContext);
+  const regimeStrength = clamp(
+    Math.abs(tf15.emaSpreadPct) * 18 + tf15.adx * 0.8 + tf15.trendEfficiency * 22 + Math.abs(tf5.emaSlopePct) * 12,
+    0,
+    100,
+  );
+  const trendHierarchy = Math.sign(tf1.emaSpreadPct) * Math.sign(tf5.emaSpreadPct) + Math.sign(tf5.emaSpreadPct) * Math.sign(tf15.emaSpreadPct);
+  const meanReversionStretch = Math.abs(tf1.bollingerZ) + Math.abs(tf1.distFromVwapAtr) + Math.abs(tf1.closeLocation - 0.5) * 2;
+  const structurePressure =
+    (tf1.closeLocation - 0.5) * 2 +
+    (tf1.bodyToRange - 0.5) * 1.4 +
+    (tf1.wickBullish ? 0.35 : 0) -
+    (tf1.wickBearish ? 0.35 : 0);
+  const expectedCostBps = featureValue("expectedCostBps");
+  const expectedEdgeBps = decision.riskReward * decision.takeProfitPct * 10_000 - expectedCostBps;
   const featureMap: Record<string, number> = {
     tf1_rsi: tf1.rsi,
     tf1_atr_pct: tf1.atrPct * 100,
@@ -630,6 +745,10 @@ export function extractFeatureMap(
     wick_bullish: tf1.wickBullish ? 1 : 0,
     wick_bearish: tf1.wickBearish ? 1 : 0,
     hour_utc: state.latestHourUtc ?? 0,
+    session_asia: sessionBucket === "asia" ? 1 : 0,
+    session_europe: sessionBucket === "europe" ? 1 : 0,
+    session_us: sessionBucket === "us" ? 1 : 0,
+    session_offhours: sessionBucket === "offhours" ? 1 : 0,
     decision_confidence: decision.confidence,
     decision_risk_reward: decision.riskReward,
     decision_is_long: decision.action === "long" ? 1 : 0,
@@ -640,11 +759,23 @@ export function extractFeatureMap(
     quality_setup: featureValue("setupQuality"),
     quality_execution: featureValue("executionQuality"),
     quality_composite: featureValue("qualityScore"),
-    expected_cost_bps: featureValue("expectedCostBps"),
+    quality_confidence_gap: featureValue("qualityScore") - decision.confidence,
+    expected_cost_bps: expectedCostBps,
+    expected_edge_bps: expectedEdgeBps,
     edge_to_cost_ratio: featureValue("edgeToCostRatio"),
     risk_multiplier: featureValue("riskMultiplier"),
     leverage_multiplier: featureValue("leverageMultiplier"),
+    regime_strength: regimeStrength,
+    trend_hierarchy: trendHierarchy,
+    mean_reversion_stretch: meanReversionStretch,
+    structure_pressure: structurePressure,
     ...microFeatures,
+    micro_pressure_divergence: Math.abs((microContext.current?.primaryBook?.imbalance ?? 0) - (microContext.current?.secondaryBook?.imbalance ?? 0)),
+    micro_oi_crowding_interaction: (microContext.current?.openInterestChangePct ?? 0) * (microContext.current?.crowdingScore ?? 0),
+    micro_basis_taker_alignment: (microContext.current?.crossVenueBasisBps ?? 0) * (microContext.current?.takerImbalance ?? 0),
+    micro_liquidation_pressure_change:
+      (microContext.current?.liquidationBias ?? 0) *
+      ((microFeatures.micro_pressure_trend ?? 0) + (microContext.current?.liquidationIntensity ?? 0)),
   };
 
   return {
@@ -683,16 +814,47 @@ export function buildTrainingExamples(
       ...options,
       microstructureHistory: preparedMicrostructureHistory,
     });
-    const labelLong = futureMaxUpPct - costPct >= moveThresholdPct && futureMaxDownPct <= moveThresholdPct * 1.5 ? 1 : 0;
-    const labelShort = futureMaxDownPct - costPct >= moveThresholdPct && futureMaxUpPct <= moveThresholdPct * 1.5 ? 1 : 0;
+    const expectedCostPct = Math.max((featureMap.expected_cost_bps ?? 0) / 100, costPct);
+    const dynamicMoveThresholdPct = Math.max(
+      moveThresholdPct,
+      expectedCostPct * 1.8,
+      Math.abs(featureMap.tf1_atr_pct ?? 0) * 0.85,
+      Math.abs(featureMap.tf1_realized_vol_pct ?? 0) * 0.45,
+    );
+    const adverseAllowancePct = Math.max(dynamicMoveThresholdPct * 1.3, expectedCostPct * 2.1, 0.12);
+    const netFutureReturnPct = futureReturnPct - expectedCostPct;
+    const labelLong = (
+      netFutureReturnPct >= dynamicMoveThresholdPct &&
+      futureMaxDownPct <= adverseAllowancePct
+    ) || (
+      futureMaxUpPct - expectedCostPct >= dynamicMoveThresholdPct * 1.1 &&
+      futureMaxDownPct <= adverseAllowancePct * 1.1 &&
+      futureReturnPct >= -(dynamicMoveThresholdPct * 0.2)
+    ) ? 1 : 0;
+    const labelShort = (
+      -futureReturnPct - expectedCostPct >= dynamicMoveThresholdPct &&
+      futureMaxUpPct <= adverseAllowancePct
+    ) || (
+      futureMaxDownPct - expectedCostPct >= dynamicMoveThresholdPct * 1.1 &&
+      futureMaxUpPct <= adverseAllowancePct * 1.1 &&
+      futureReturnPct <= dynamicMoveThresholdPct * 0.2
+    ) ? 1 : 0;
+    const sessionBucket = deriveSessionBucket(featureMap.hour_utc ?? 0);
+    const volatilityBucket = deriveVolatilityBucket(featureMap.tf1_atr_pct ?? 0, featureMap.tf15_realized_vol_pct ?? 0);
 
     rows.push({
       timestamp: current.timestamp ?? null,
       regime: decision.regime,
+      regimeSegment: buildRegimeSegment(decision.regime, sessionBucket, volatilityBucket, decision.setupType),
+      sessionBucket,
+      volatilityBucket,
       decision,
       futureReturnPct: round(futureReturnPct, 6),
+      netFutureReturnPct: round(netFutureReturnPct, 6),
       futureMaxUpPct: round(futureMaxUpPct, 6),
       futureMaxDownPct: round(futureMaxDownPct, 6),
+      dynamicMoveThresholdPct: round(dynamicMoveThresholdPct, 6),
+      adverseAllowancePct: round(adverseAllowancePct, 6),
       labelLong,
       labelShort,
       featureMap,
@@ -710,6 +872,142 @@ function splitExamples(examples: TrainingExample[]) {
     train: examples.slice(0, trainEnd),
     validation: examples.slice(trainEnd, validationEnd),
     test: examples.slice(validationEnd),
+  };
+}
+
+function summarizeDataset(examples: TrainingExample[], side: "long" | "short", splits: ReturnType<typeof splitExamples>): DatasetProfile {
+  const labels = labelsForSide(examples, side);
+  const timestamps = examples
+    .map((example) => example.timestamp)
+    .filter((timestamp): timestamp is number => timestamp !== null && Number.isFinite(timestamp));
+  const coverageDays = timestamps.length >= 2
+    ? round((timestamps[timestamps.length - 1] - timestamps[0]) / (24 * 60 * 60 * 1000), 4)
+    : 0;
+
+  return {
+    totalExamples: examples.length,
+    trainExamples: splits.train.length,
+    validationExamples: splits.validation.length,
+    testExamples: splits.test.length,
+    positiveRate: round(average(labels), 6),
+    coverageDays,
+    avgFutureReturnPct: round(average(examples.map((example) => example.futureReturnPct)), 6),
+    avgNetFutureReturnPct: round(average(examples.map((example) => example.netFutureReturnPct)), 6),
+    avgMoveThresholdPct: round(average(examples.map((example) => example.dynamicMoveThresholdPct)), 6),
+    avgAdverseAllowancePct: round(average(examples.map((example) => example.adverseAllowancePct)), 6),
+    regimeCounts: countBy(examples.map((example) => example.regime)),
+    sessionCounts: countBy(examples.map((example) => example.sessionBucket)),
+    volatilityCounts: countBy(examples.map((example) => example.volatilityBucket)),
+  };
+}
+
+function evaluateSegments(
+  examples: TrainingExample[],
+  rows: number[][],
+  labels: number[],
+  weights: number[],
+  bias: number,
+  threshold: number,
+  side: "long" | "short",
+) {
+  const groups = new Map<string, { rows: number[][]; labels: number[]; examples: TrainingExample[]; probabilities: number[] }>();
+
+  rows.forEach((row, index) => {
+    const example = examples[index];
+    const key = example.regimeSegment;
+    const existing = groups.get(key) ?? { rows: [], labels: [], examples: [], probabilities: [] };
+    existing.rows.push(row);
+    existing.labels.push(labels[index]);
+    existing.examples.push(example);
+    existing.probabilities.push(sigmoid(dotProduct(row, weights) + bias));
+    groups.set(key, existing);
+  });
+
+  return Object.fromEntries(
+    [...groups.entries()]
+      .sort((left, right) => right[1].rows.length - left[1].rows.length)
+      .map(([segment, group]) => {
+        const metrics = evaluateLogistic(group.rows, group.labels, weights, bias, threshold);
+        const opportunityKey = side === "long" ? "futureMaxUpPct" : "futureMaxDownPct";
+        const adverseKey = side === "long" ? "futureMaxDownPct" : "futureMaxUpPct";
+
+        return [segment, {
+          ...metrics,
+          samples: group.rows.length,
+          labelRate: round(average(group.labels), 6),
+          avgFutureReturnPct: round(average(group.examples.map((example) => example.futureReturnPct)), 6),
+          avgNetFutureReturnPct: round(average(group.examples.map((example) => example.netFutureReturnPct)), 6),
+          avgOpportunityPct: round(average(group.examples.map((example) => example[opportunityKey])), 6),
+          avgAdversePct: round(average(group.examples.map((example) => example[adverseKey])), 6),
+          avgProbability: round(average(group.probabilities), 6),
+        } satisfies SegmentClassificationMetrics];
+      }),
+  ) as Record<string, SegmentClassificationMetrics>;
+}
+
+function evaluateModelEligibility(
+  dataset: DatasetProfile,
+  metrics: DatasetSplitMetrics,
+  regimeMetrics: RegimeMetricsBySplit,
+): ModelEligibility {
+  const thresholds = {
+    minimumExamples: 1_200,
+    minValidationPrecision: 0.5,
+    minTestPrecision: 0.5,
+    maxValidationBrier: 0.24,
+    maxTestBrier: 0.24,
+    maxOverfitGap: 0.2,
+    minRobustSegments: 2,
+  };
+  const reasons: string[] = [];
+  const robustSegments = Object.values(regimeMetrics.test).filter(
+    (segment) => segment.samples >= 25 && segment.precision >= 0.5,
+  ).length;
+  const overfitGap = metrics.train.f1 - metrics.validation.f1;
+
+  if (dataset.totalExamples < thresholds.minimumExamples) {
+    reasons.push(`dataset too small (${dataset.totalExamples} < ${thresholds.minimumExamples})`);
+  }
+  if (dataset.positiveRate < 0.025 || dataset.positiveRate > 0.45) {
+    reasons.push(`label distribution unstable (${(dataset.positiveRate * 100).toFixed(1)}%)`);
+  }
+  if (metrics.validation.precision < thresholds.minValidationPrecision) {
+    reasons.push(`validation precision ${metrics.validation.precision.toFixed(2)} below gate`);
+  }
+  if (metrics.test.precision < thresholds.minTestPrecision) {
+    reasons.push(`test precision ${metrics.test.precision.toFixed(2)} below gate`);
+  }
+  if (metrics.validation.brier > thresholds.maxValidationBrier) {
+    reasons.push(`validation brier ${metrics.validation.brier.toFixed(3)} above gate`);
+  }
+  if (metrics.test.brier > thresholds.maxTestBrier) {
+    reasons.push(`test brier ${metrics.test.brier.toFixed(3)} above gate`);
+  }
+  if (overfitGap > thresholds.maxOverfitGap) {
+    reasons.push(`overfit gap ${overfitGap.toFixed(2)} above gate`);
+  }
+  if (robustSegments < thresholds.minRobustSegments) {
+    reasons.push(`only ${robustSegments} robust test segments`);
+  }
+
+  const score = round(
+    dataset.totalExamples / 1_000 * 0.25 +
+    metrics.validation.precision * 25 +
+    metrics.test.precision * 30 +
+    metrics.validation.f1 * 14 +
+    metrics.test.f1 * 16 +
+    (1 - metrics.validation.brier) * 8 +
+    (1 - metrics.test.brier) * 8 +
+    robustSegments * 2 -
+    Math.max(overfitGap, 0) * 12,
+    4,
+  );
+
+  return {
+    approved: reasons.length === 0,
+    score,
+    reasons,
+    thresholds,
   };
 }
 
@@ -836,7 +1134,8 @@ export function trainLogisticModel(
     microstructureHistory: options.microstructureHistory,
     microstructureLookbackMs: options.microstructureLookbackMs,
   });
-  const { train, validation, test } = splitExamples(examples);
+  const splits = splitExamples(examples);
+  const { train, validation, test } = splits;
   const trainRows = train.map((example) => example.features);
   const validationRows = validation.map((example) => example.features);
   const testRows = test.map((example) => example.features);
@@ -870,6 +1169,17 @@ export function trainLogisticModel(
   }
 
   const threshold = optimalThreshold(normalizedValidation, validationLabels, weights, bias);
+  const metrics = {
+    train: evaluateLogistic(normalizedTrain, trainLabels, weights, bias, threshold),
+    validation: evaluateLogistic(normalizedValidation, validationLabels, weights, bias, threshold),
+    test: evaluateLogistic(normalizedTest, testLabels, weights, bias, threshold),
+  } satisfies DatasetSplitMetrics;
+  const dataset = summarizeDataset(examples, options.side, splits);
+  const regimeMetrics = {
+    validation: evaluateSegments(validation, normalizedValidation, validationLabels, weights, bias, threshold, options.side),
+    test: evaluateSegments(test, normalizedTest, testLabels, weights, bias, threshold, options.side),
+  } satisfies RegimeMetricsBySplit;
+  const eligibility = evaluateModelEligibility(dataset, metrics, regimeMetrics);
 
   return {
     side: options.side,
@@ -884,11 +1194,10 @@ export function trainLogisticModel(
     epochs,
     learningRate,
     regularization,
-    metrics: {
-      train: evaluateLogistic(normalizedTrain, trainLabels, weights, bias, threshold),
-      validation: evaluateLogistic(normalizedValidation, validationLabels, weights, bias, threshold),
-      test: evaluateLogistic(normalizedTest, testLabels, weights, bias, threshold),
-    },
+    metrics,
+    dataset,
+    regimeMetrics,
+    eligibility,
   };
 }
 

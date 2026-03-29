@@ -121,3 +121,35 @@ export async function insertModelArtifact(payload: Record<string, unknown>) {
   }
   return data?.id ?? null;
 }
+
+export async function fetchLatestResearchRun(options: {
+  userId?: string | null;
+  runType?: string;
+  symbol?: string;
+} = {}) {
+  const supabase = maybeCreateSupabaseAdmin();
+  if (!supabase) return null;
+
+  let query = supabase
+    .from("research_runs")
+    .select("id, created_at, run_type, symbol, summary, config, artifact_path, user_id")
+    .order("created_at", { ascending: false })
+    .limit(1);
+
+  if (options.userId) {
+    query = query.eq("user_id", options.userId);
+  }
+  if (options.runType) {
+    query = query.eq("run_type", options.runType);
+  }
+  if (options.symbol) {
+    query = query.eq("symbol", options.symbol);
+  }
+
+  const { data, error } = await query.maybeSingle();
+  if (error) {
+    throw error;
+  }
+
+  return data ?? null;
+}

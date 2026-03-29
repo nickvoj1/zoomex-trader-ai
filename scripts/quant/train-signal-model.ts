@@ -67,6 +67,9 @@ async function trainSide(input: string, side: "long" | "short", output: string) 
     summary: {
       dataQuality: dataset.quality,
       metrics: model.metrics,
+      dataset: model.dataset,
+      regimeMetrics: model.regimeMetrics,
+      eligibility: model.eligibility,
     },
     artifact_path: output,
   }).catch(() => null);
@@ -78,7 +81,7 @@ async function trainSide(input: string, side: "long" | "short", output: string) 
     side,
     horizon_bars: model.horizonBars,
     move_threshold_pct: model.moveThresholdPct,
-    metrics: model.metrics,
+    metrics: { ...model.metrics, dataset: model.dataset, eligibility: model.eligibility },
     artifact: model,
     source_run_id: runId,
   }).catch(() => null);
@@ -102,6 +105,7 @@ async function main() {
       output: outputBase,
       side: requestedSide,
       metrics: model.metrics,
+      eligibility: model.eligibility,
     }, null, 2));
     return;
   }
@@ -118,6 +122,8 @@ async function main() {
     ],
     longMetrics: longModel.metrics,
     shortMetrics: shortModel.metrics,
+    longEligibility: longModel.eligibility,
+    shortEligibility: shortModel.eligibility,
   }, null, 2));
 }
 

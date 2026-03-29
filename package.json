@@ -15,6 +15,7 @@
     "research:backfill": "tsx scripts/quant/backfill-candles.ts",
     "research:market-data": "tsx scripts/quant/fetch-market-data.ts",
     "research:cycle": "tsx scripts/quant/research-cycle.ts",
+    "research:schedule": "tsx scripts/quant/retrain-scheduler.ts",
     "research:sweep": "tsx scripts/quant/parameter-sweep.ts",
     "research:walk-forward": "tsx scripts/quant/walk-forward.ts",
     "research:train": "tsx scripts/quant/train-signal-model.ts",

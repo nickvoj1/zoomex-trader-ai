@@ -111,6 +111,12 @@ interface ModelArtifactRow {
   artifact: LogisticModelArtifact | null;
 }
 
+interface ArtifactEligibilityLike {
+  approved?: boolean;
+  score?: number;
+  reasons?: string[];
+}
+
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
 }
@@ -383,6 +389,40 @@ async function getRecentMicrostructureHistory(
   );
 }
 
+function legacyModelApproval(artifact: LogisticModelArtifact) {
+  return artifact.metrics.validation.precision >= 0.5 &&
+    artifact.metrics.test.precision >= 0.5 &&
+    artifact.metrics.validation.brier <= 0.24 &&
+    artifact.metrics.test.brier <= 0.24 &&
+    artifact.metrics.train.f1 - artifact.metrics.validation.f1 <= 0.2;
+}
+
+function modelApprovalStatus(artifact: LogisticModelArtifact | null) {
+  if (!artifact) {
+    return { approved: false, score: -Infinity };
+  }
+
+  const eligibility = (artifact as LogisticModelArtifact & { eligibility?: ArtifactEligibilityLike }).eligibility;
+  if (eligibility) {
+    return {
+      approved: eligibility.approved === true,
+      score: Number.isFinite(eligibility.score) ? Number(eligibility.score) : -Infinity,
+    };
+  }
+
+  const score =
+    artifact.metrics.validation.precision * 25 +
+    artifact.metrics.test.precision * 30 +
+    artifact.metrics.validation.f1 * 15 +
+    artifact.metrics.test.f1 * 15 -
+    artifact.metrics.validation.brier * 10 -
+    artifact.metrics.test.brier * 10;
+  return {
+    approved: legacyModelApproval(artifact),
+    score,
+  };
+}
+
 async function loadLatestSignalModels(
   supabaseAdmin: ReturnType<typeof createAdminClient>,
   userId: string,
@@ -399,13 +439,28 @@ async function loadLatestSignalModels(
 
   const rows = ((data ?? []) as ModelArtifactRow[])
     .filter((row) => row.user_id === userId || row.user_id === null);
-  const pickLatest = (side: "long" | "short") => rows.find((row) => row.side === side && row.artifact);
-  const longRow = pickLatest("long");
-  const shortRow = pickLatest("short");
+  const pickEligible = (side: "long" | "short") => rows
+    .filter((row) => row.side === side && row.artifact)
+    .map((row) => ({
+      row,
+      approval: modelApprovalStatus(row.artifact),
+      createdAtMs: Date.parse(row.created_at),
+    }))
+    .sort((left, right) => {
+      if (left.approval.approved !== right.approval.approved) {
+        return left.approval.approved ? -1 : 1;
+      }
+      if (left.approval.score !== right.approval.score) {
+        return right.approval.score - left.approval.score;
+      }
+      return right.createdAtMs - left.createdAtMs;
+    })[0]?.row ?? null;
+  const longRow = pickEligible("long");
+  const shortRow = pickEligible("short");
 
   return {
-    longModel: longRow?.artifact ?? null,
-    shortModel: shortRow?.artifact ?? null,
+    longModel: longRow?.artifact && modelApprovalStatus(longRow.artifact).approved ? longRow.artifact : null,
+    shortModel: shortRow?.artifact && modelApprovalStatus(shortRow.artifact).approved ? shortRow.artifact : null,
     longModelId: longRow?.id ?? null,
     shortModelId: shortRow?.id ?? null,
   };

@@ -25,7 +25,7 @@ ScalpPro is a Supabase-backed React app for paper trading and controlled live ex
 - MEXC contract REST and websocket APIs
 - OpenAI chat completions for optional discretionary confirmation
 - Cross-venue market data from MEXC contract APIs and Binance futures market-data APIs
-- Latest trained signal models are now loaded by `scalper` when model artifacts exist
+- `scalper` now only loads approved signal models that pass validation gates and overfit checks
 
 ## Quant extensions
 
@@ -101,6 +101,8 @@ Train logistic signal models:
 npm run research:train -- --input /absolute/path/to/btcusdt-1m.csv --side both
 ```
 
+The trained artifacts now include dataset diagnostics, regime-segment validation metrics, and an approval decision that the live bot uses before loading them.
+
 If you already have historical market snapshots in JSON, you can feed them into training too:
 
 ```bash
@@ -111,6 +113,12 @@ Run the full research cycle in one shot:
 
 ```bash
 npm run research:cycle -- --input /absolute/path/to/btcusdt-1m.csv
+```
+
+Run scheduled retraining from collected data:
+
+```bash
+npm run research:schedule -- --input /absolute/path/to/btcusdt-1m.csv --every-minutes 240
 ```
 
 Fetch cross-venue market snapshots:
@@ -170,3 +178,4 @@ curl -X POST \
 - Added cross-venue microstructure gating to the live strategy path
 - Added live model-artifact confirmation/veto on top of the rule engine
 - Added dataset backfill, cleaning, gap handling, and data-quality reporting for research inputs
+- Added regime-aware model diagnostics, approval gates, and scheduled retraining support
