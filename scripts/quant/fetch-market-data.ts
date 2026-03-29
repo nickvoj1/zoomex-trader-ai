@@ -1,6 +1,7 @@
+import { appendFile } from "node:fs/promises";
 import { createClient } from "@supabase/supabase-js";
 import { fetchCrossVenueSnapshot } from "../../src/lib/market-intel";
-import { booleanArg, numberArg, parseArgs, stringArg, timestampedFile, writeJson } from "./shared";
+import { booleanArg, ensureParentDirectory, numberArg, parseArgs, stringArg, timestampedFile, writeJson } from "./shared";
 
 interface SupabaseWriter {
   from: (table: string) => {
@@ -77,12 +78,23 @@ async function main() {
   const iterations = numberArg(args, "iterations", 1);
   const intervalMs = numberArg(args, "interval-ms", 60_000);
   const writeToFile = booleanArg(args, "write-file", true);
+  const appendJsonl = booleanArg(args, "append-jsonl", false);
   const output = stringArg(args, "output", `research/${timestampedFile("market-snapshots", "json")}`)!;
   const snapshots: Awaited<ReturnType<typeof fetchCrossVenueSnapshot>>[] = [];
+  let lastSnapshot: Awaited<ReturnType<typeof fetchCrossVenueSnapshot>> | null = null;
+
+  if (appendJsonl) {
+    await ensureParentDirectory(output);
+  }
 
   for (let index = 0; index < iterations; index += 1) {
     const snapshot = await fetchCrossVenueSnapshot();
-    snapshots.push(snapshot);
+    lastSnapshot = snapshot;
+    if (appendJsonl) {
+      await appendFile(output, `${JSON.stringify({ createdAt: new Date().toISOString(), snapshot })}\n`, "utf8");
+    } else {
+      snapshots.push(snapshot);
+    }
     await persistSnapshot(snapshot).catch((error) => {
       console.error("Supabase persist failed:", error instanceof Error ? error.message : error);
     });
@@ -91,7 +103,7 @@ async function main() {
     }
   }
 
-  if (writeToFile) {
+  if (writeToFile && !appendJsonl) {
     await writeJson(output, {
       createdAt: new Date().toISOString(),
       snapshots,
@@ -100,8 +112,9 @@ async function main() {
 
   console.log(JSON.stringify({
     iterations,
-    output: writeToFile ? output : null,
-    lastSnapshot: snapshots[snapshots.length - 1] ?? null,
+    appendJsonl,
+    output: writeToFile || appendJsonl ? output : null,
+    lastSnapshot: lastSnapshot ?? snapshots[snapshots.length - 1] ?? null,
   }, null, 2));
 }
 

@@ -13,6 +13,7 @@
     "test:watch": "vitest",
     "typecheck:scripts": "tsc -p tsconfig.scripts.json",
     "research:backfill": "tsx scripts/quant/backfill-candles.ts",
+    "research:vision": "tsx scripts/quant/download-binance-vision.ts",
     "research:market-data": "tsx scripts/quant/fetch-market-data.ts",
     "research:cycle": "tsx scripts/quant/research-cycle.ts",
     "research:schedule": "tsx scripts/quant/retrain-scheduler.ts",

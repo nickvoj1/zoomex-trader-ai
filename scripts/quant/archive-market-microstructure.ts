@@ -1,4 +1,5 @@
-import { booleanArg, numberArg, parseArgs, stringArg, timestampedFile, writeJson } from "./shared";
+import { appendFile } from "node:fs/promises";
+import { booleanArg, ensureParentDirectory, numberArg, parseArgs, stringArg, timestampedFile, writeJson } from "./shared";
 import {
   collectMicrostructureArchiveSample,
   createSupabaseAdminFromEnv,
@@ -15,6 +16,7 @@ async function main() {
   const intervalMs = numberArg(args, "interval-ms", 15_000);
   const persist = booleanArg(args, "persist", true);
   const writeFile = booleanArg(args, "write-file", false);
+  const appendJsonl = booleanArg(args, "append-jsonl", false);
   const output = stringArg(args, "output", `research/${timestampedFile("microstructure-archive", "json")}`)!;
   const symbol = stringArg(args, "symbol", "BTCUSDT")!;
   const depthLimit = numberArg(args, "depth-limit", 20);
@@ -24,6 +26,11 @@ async function main() {
 
   const supabase = persist ? createSupabaseAdminFromEnv() : null;
   const samples: unknown[] = [];
+  let lastSample: unknown = null;
+
+  if (appendJsonl) {
+    await ensureParentDirectory(output);
+  }
 
   for (let index = 0; index < iterations; index += 1) {
     const sample = supabase
@@ -42,17 +49,23 @@ async function main() {
         tradeLimit,
       });
 
-    samples.push({
+    const entry = {
       createdAt: new Date().toISOString(),
       sample,
-    });
+    };
+    lastSample = entry;
+    if (appendJsonl) {
+      await appendFile(output, `${JSON.stringify(entry)}\n`, "utf8");
+    } else {
+      samples.push(entry);
+    }
 
     if (index + 1 < iterations) {
       await sleep(intervalMs);
     }
   }
 
-  if (writeFile) {
+  if (writeFile && !appendJsonl) {
     await writeJson(output, {
       createdAt: new Date().toISOString(),
       iterations,
@@ -65,8 +78,9 @@ async function main() {
     iterations,
     intervalMs,
     persisted: persist,
-    output: writeFile ? output : null,
-    lastSample: samples[samples.length - 1] ?? null,
+    appendJsonl,
+    output: writeFile || appendJsonl ? output : null,
+    lastSample: lastSample ?? samples[samples.length - 1] ?? null,
   }, null, 2));
 }
 
