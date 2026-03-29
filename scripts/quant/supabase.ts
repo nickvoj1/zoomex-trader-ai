@@ -68,7 +68,7 @@ export async function fetchHistoricalMicrostructureSnapshots(options: {
     )
     .eq("venue", "composite")
     .eq("snapshot_type", "microstructure")
-    .eq("symbol", options.symbol ?? "BTCUSDT")
+    .in("symbol", [options.symbol ?? "BTCUSDT", "BTC_USDT"])
     .order("created_at", { ascending: true });
 
   if (options.startAt) {

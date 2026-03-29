@@ -1,6 +1,10 @@
-import { createClient } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { fetchCrossVenueSnapshot } from "../../src/lib/market-intel";
 import { getOpenPositions } from "../../supabase/functions/_shared/mexc";
+import {
+  buildAndPersistForwardValidationReports,
+  persistMicrostructureArchiveSample,
+} from "./live-ops";
 import { booleanArg, numberArg, parseArgs, stringArg } from "./shared";
 
 interface QueryResult<T = unknown> {
@@ -8,19 +12,7 @@ interface QueryResult<T = unknown> {
   error: { message: string } | null;
 }
 
-interface SupabaseQuery {
-  select: (columns: string) => SupabaseQuery;
-  eq: (column: string, value: unknown) => SupabaseQuery;
-  maybeSingle: () => Promise<QueryResult<unknown>>;
-  order: (column: string, options?: { ascending?: boolean }) => SupabaseQuery;
-  limit: (count: number) => SupabaseQuery;
-  insert: (values: unknown) => Promise<QueryResult<unknown>>;
-  upsert: (values: unknown, options?: { onConflict?: string }) => Promise<QueryResult<unknown>>;
-}
-
-interface SupabaseAdmin {
-  from: (table: string) => SupabaseQuery;
-}
+type SupabaseAdmin = SupabaseClient;
 
 interface ClosedTradeRow {
   id: string;
@@ -141,12 +133,13 @@ async function insertExecutionEvent(
 async function insertMarketSnapshot(
   supabase: SupabaseAdmin,
   snapshot: Awaited<ReturnType<typeof fetchCrossVenueSnapshot>>,
+  symbol: string,
 ) {
   const rows: Array<Record<string, unknown>> = [snapshot.primary, snapshot.secondary]
     .filter((entry) => entry !== null)
     .map((entry) => ({
       venue: entry!.venue,
-      symbol: entry!.symbol,
+      symbol,
       snapshot_type: "venue",
       mid_price: entry!.midPrice,
       mark_price: entry!.markPrice,
@@ -167,7 +160,7 @@ async function insertMarketSnapshot(
   if (snapshot.microstructure) {
     rows.push({
       venue: "composite",
-      symbol: snapshot.symbol,
+      symbol,
       snapshot_type: "microstructure",
       mid_price: snapshot.primary?.midPrice ?? snapshot.secondary?.midPrice ?? null,
       mark_price: snapshot.primary?.markPrice ?? snapshot.secondary?.markPrice ?? null,
@@ -340,7 +333,11 @@ async function main() {
   const intervalMs = numberArg(args, "interval-ms", 60_000);
   const once = booleanArg(args, "once", false);
   const enableLiquidations = booleanArg(args, "enable-liquidations", true);
-  const supabase = createClient(supabaseUrl, serviceRoleKey) as unknown as SupabaseAdmin;
+  const forwardLookbackDays = numberArg(args, "forward-lookback-days", 14);
+  const startingBalanceUsd = numberArg(args, "starting-balance", 10_000);
+  const archiveDepthLimit = numberArg(args, "archive-depth-limit", 20);
+  const archiveTradeLimit = numberArg(args, "archive-trade-limit", 1_000);
+  const supabase = createClient(supabaseUrl, serviceRoleKey) as SupabaseAdmin;
   const liquidationCollector = createLiquidationCollector(enableLiquidations);
 
   try {
@@ -353,7 +350,17 @@ async function main() {
         binanceSymbol: symbol,
         liquidationMetrics,
       });
-      await insertMarketSnapshot(supabase, snapshot);
+      await insertMarketSnapshot(supabase, snapshot, symbol);
+      const archiveSummary = await persistMicrostructureArchiveSample(supabase, {
+        symbol,
+        mexcSymbol: "BTC_USDT",
+        binanceSymbol: symbol,
+        depthLimit: archiveDepthLimit,
+        tradeLimit: archiveTradeLimit,
+      }).catch((error) => {
+        console.error("microstructure archive persist failed:", error instanceof Error ? error.message : error);
+        return null;
+      });
 
       const scalper = await callScalper(scalperUrl, serviceRoleKey, userId);
       await insertExecutionEvent(supabase, {
@@ -385,6 +392,29 @@ async function main() {
           details: reconciliation,
         });
         await analyzeTradeCosts(supabase, userId, symbol);
+        const forwardReports = await buildAndPersistForwardValidationReports(supabase, {
+          userId,
+          symbol,
+          lookbackDays: forwardLookbackDays,
+          startingBalanceUsd,
+          includeEmpty: false,
+        }).catch((error) => {
+          console.error("forward validation report failed:", error instanceof Error ? error.message : error);
+          return [];
+        });
+        if (forwardReports.length > 0) {
+          await insertExecutionEvent(supabase, {
+            user_id: userId,
+            venue: "supabase",
+            symbol,
+            event_type: "forward_validation",
+            status: forwardReports.every((report) => report.gatePassed) ? "success" : "warning",
+            latency_ms: Date.now() - cycleStartedAt,
+            details: {
+              reports: forwardReports,
+            },
+          });
+        }
       }
 
       console.log(JSON.stringify({
@@ -392,6 +422,8 @@ async function main() {
         latencyMs: Date.now() - cycleStartedAt,
         crossVenueBasisBps: snapshot.microstructure?.crossVenueBasisBps ?? null,
         scalperStatus: scalper.status,
+        archiveOrderbookInserted: archiveSummary?.orderbookInserted ?? null,
+        archiveTradeTicksUpserted: archiveSummary?.tradeTicksUpserted ?? null,
       }, null, 2));
 
       if (once) {

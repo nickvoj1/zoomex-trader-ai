@@ -34,6 +34,35 @@ export interface CrossVenueSnapshot {
   microstructure: MarketMicrostructure | null;
 }
 
+export interface ArchivedOrderBookSnapshot {
+  venue: "mexc" | "binance";
+  symbol: string;
+  fetchedAt: number;
+  depthLimit: number;
+  bestBid: number | null;
+  bestAsk: number | null;
+  spreadBps: number | null;
+  imbalance: number | null;
+  bids: OrderBookLevel[];
+  asks: OrderBookLevel[];
+  exchangeTimestamp: number | null;
+  latencyMs: number;
+  rawPayload: Record<string, unknown>;
+}
+
+export interface ArchivedTradeTick {
+  venue: "mexc" | "binance";
+  symbol: string;
+  fetchedAt: number;
+  exchangeTradeId: string;
+  exchangeTimestamp: number | null;
+  price: number;
+  size: number;
+  side: "buy" | "sell" | null;
+  notionalUsd: number;
+  rawPayload: Record<string, unknown>;
+}
+
 function round(value: number, precision = 4) {
   return Number(value.toFixed(precision));
 }
@@ -164,6 +193,66 @@ export async function fetchMexcMarketSnapshot(symbol = "BTC_USDT") {
   } satisfies VenueMarketSnapshot;
 }
 
+export async function fetchMexcOrderBookSnapshot(symbol = "BTC_USDT", depthLimit = 20) {
+  const depthResponse = await fetchJson<{ data?: { bids?: unknown; asks?: unknown; timestamp?: number } }>(
+    `${MEXC_CONTRACT_BASE_URL}/api/v1/contract/depth/${symbol}?limit=${depthLimit}`,
+  );
+
+  const bids = parseOrderBookLevels(depthResponse.data.data?.bids);
+  const asks = parseOrderBookLevels(depthResponse.data.data?.asks);
+  const orderBook = summarizeOrderBook("mexc", bids, asks, depthResponse.data.data?.timestamp);
+
+  return {
+    venue: "mexc" as const,
+    symbol,
+    fetchedAt: Date.now(),
+    depthLimit,
+    bestBid: orderBook?.bestBid ?? null,
+    bestAsk: orderBook?.bestAsk ?? null,
+    spreadBps: orderBook?.spreadBps ?? null,
+    imbalance: orderBook?.imbalance ?? null,
+    bids,
+    asks,
+    exchangeTimestamp: safeNumber(depthResponse.data.data?.timestamp),
+    latencyMs: depthResponse.latencyMs,
+    rawPayload: depthResponse.data,
+  } satisfies ArchivedOrderBookSnapshot;
+}
+
+export async function fetchMexcRecentTradeTicks(symbol = "BTC_USDT", limit = 100) {
+  const response = await fetchJson<{ data?: unknown }>(
+    `${MEXC_CONTRACT_BASE_URL}/api/v1/contract/deals/${symbol}?limit=${limit}`,
+  );
+  const rows = Array.isArray(response.data.data) ? response.data.data : [];
+  const ticks: ArchivedTradeTick[] = [];
+
+  for (const row of rows) {
+    if (!row || typeof row !== "object") continue;
+    const record = row as Record<string, unknown>;
+    const price = safeNumber(record.p);
+    const size = safeNumber(record.v);
+    const exchangeTradeId = typeof record.i === "string" || typeof record.i === "number" ? String(record.i) : null;
+    if (price === null || size === null || !exchangeTradeId) {
+      continue;
+    }
+    const sideCode = safeNumber(record.T);
+    ticks.push({
+      venue: "mexc",
+      symbol,
+      fetchedAt: Date.now(),
+      exchangeTradeId,
+      exchangeTimestamp: safeNumber(record.t),
+      price,
+      size,
+      side: sideCode === 1 ? "buy" : sideCode === 2 ? "sell" : null,
+      notionalUsd: round(price * size, 8),
+      rawPayload: record,
+    });
+  }
+
+  return ticks;
+}
+
 function parseBinanceDepth(payload: unknown) {
   if (!payload || typeof payload !== "object") {
     return { bids: [], asks: [], timestamp: undefined };
@@ -245,6 +334,62 @@ export async function fetchBinanceMarketSnapshot(symbol = "BTCUSDT") {
       takerLongShortRatio: takerResponse.data,
     },
   } satisfies VenueMarketSnapshot;
+}
+
+export async function fetchBinanceOrderBookSnapshot(symbol = "BTCUSDT", depthLimit = 20) {
+  const depthResponse = await fetchJson<Record<string, unknown>>(
+    `${BINANCE_FUTURES_BASE_URL}/fapi/v1/depth?symbol=${symbol}&limit=${depthLimit}`,
+  );
+  const depth = parseBinanceDepth(depthResponse.data);
+  const orderBook = summarizeOrderBook("binance", depth.bids, depth.asks, depth.timestamp);
+
+  return {
+    venue: "binance" as const,
+    symbol,
+    fetchedAt: Date.now(),
+    depthLimit,
+    bestBid: orderBook?.bestBid ?? null,
+    bestAsk: orderBook?.bestAsk ?? null,
+    spreadBps: orderBook?.spreadBps ?? null,
+    imbalance: orderBook?.imbalance ?? null,
+    bids: depth.bids,
+    asks: depth.asks,
+    exchangeTimestamp: safeNumber(depth.timestamp),
+    latencyMs: depthResponse.latencyMs,
+    rawPayload: depthResponse.data,
+  } satisfies ArchivedOrderBookSnapshot;
+}
+
+export async function fetchBinanceRecentTradeTicks(symbol = "BTCUSDT", limit = 100) {
+  const response = await fetchJson<unknown[]>(
+    `${BINANCE_FUTURES_BASE_URL}/fapi/v1/aggTrades?symbol=${symbol}&limit=${limit}`,
+  );
+  const ticks: ArchivedTradeTick[] = [];
+
+  for (const row of Array.isArray(response.data) ? response.data : []) {
+    if (!row || typeof row !== "object") continue;
+    const record = row as Record<string, unknown>;
+    const price = safeNumber(record.p);
+    const size = safeNumber(record.q);
+    const exchangeTradeId = typeof record.a === "number" || typeof record.a === "string" ? String(record.a) : null;
+    if (price === null || size === null || !exchangeTradeId) {
+      continue;
+    }
+    ticks.push({
+      venue: "binance",
+      symbol,
+      fetchedAt: Date.now(),
+      exchangeTradeId,
+      exchangeTimestamp: safeNumber(record.T),
+      price,
+      size,
+      side: typeof record.m === "boolean" ? (record.m ? "sell" : "buy") : null,
+      notionalUsd: round(price * size, 8),
+      rawPayload: record,
+    });
+  }
+
+  return ticks;
 }
 
 export function combineVenueSnapshots(

@@ -111,11 +111,29 @@ interface ModelArtifactRow {
   artifact: LogisticModelArtifact | null;
 }
 
+interface ForwardValidationReportRow {
+  created_at: string;
+  execution_mode: string;
+  trade_count: number;
+  gate_passed: boolean;
+  gate_reason: string | null;
+}
+
+interface ForwardValidationStatus {
+  paper: ForwardValidationReportRow | null;
+  live: ForwardValidationReportRow | null;
+  allowsLiveEntries: boolean;
+  sourceMode: "paper" | "live" | null;
+  reason: string;
+}
+
 interface ArtifactEligibilityLike {
   approved?: boolean;
   score?: number;
   reasons?: string[];
 }
+
+const FORWARD_VALIDATION_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
@@ -372,7 +390,7 @@ async function getRecentMicrostructureHistory(
     )
     .eq("venue", "composite")
     .eq("snapshot_type", "microstructure")
-    .eq("symbol", DB_SYMBOL)
+    .in("symbol", [DB_SYMBOL, SYMBOL])
     .gte("created_at", sinceIso)
     .order("created_at", { ascending: true })
     .limit(180);
@@ -464,6 +482,68 @@ async function loadLatestSignalModels(
     longModelId: longRow?.id ?? null,
     shortModelId: shortRow?.id ?? null,
   };
+}
+
+async function loadForwardValidationStatus(
+  supabaseAdmin: ReturnType<typeof createAdminClient>,
+  userId: string,
+): Promise<ForwardValidationStatus> {
+  const fallback: ForwardValidationStatus = {
+    paper: null,
+    live: null,
+    allowsLiveEntries: false,
+    sourceMode: null,
+    reason: "no recent forward validation report",
+  };
+
+  const { data, error } = await supabaseAdmin
+    .from("forward_validation_reports")
+    .select("created_at, execution_mode, trade_count, gate_passed, gate_reason")
+    .eq("user_id", userId)
+    .eq("symbol", DB_SYMBOL)
+    .order("created_at", { ascending: false })
+    .limit(12);
+
+  if (error) {
+    console.error("Failed to load forward validation status:", error);
+    return {
+      ...fallback,
+      reason: "forward validation lookup failed",
+    };
+  }
+
+  const rows = ((data ?? []) as ForwardValidationReportRow[]).filter((row) => {
+    const createdAtMs = Date.parse(row.created_at);
+    return Number.isFinite(createdAtMs) && Date.now() - createdAtMs <= FORWARD_VALIDATION_MAX_AGE_MS;
+  });
+  const live = rows.find((row) => row.execution_mode === "live") ?? null;
+  const paper = rows.find((row) => row.execution_mode === "paper") ?? null;
+
+  if (live) {
+    return {
+      paper,
+      live,
+      allowsLiveEntries: live.gate_passed === true,
+      sourceMode: "live",
+      reason: live.gate_passed
+        ? `live forward validation passed on ${live.trade_count} trades`
+        : live.gate_reason ?? "latest live forward validation failed",
+    };
+  }
+
+  if (paper) {
+    return {
+      paper,
+      live,
+      allowsLiveEntries: paper.gate_passed === true,
+      sourceMode: "paper",
+      reason: paper.gate_passed
+        ? `paper forward validation passed on ${paper.trade_count} trades`
+        : paper.gate_reason ?? "latest paper forward validation failed",
+    };
+  }
+
+  return fallback;
 }
 
 function applyModelOverlay(
@@ -736,6 +816,8 @@ async function executeTrade(
   paperMode: boolean,
   keys: ApiKeysRecord,
   telegramId: string | null,
+  modelIds: { longModelId: string | null; shortModelId: string | null },
+  forwardValidation: ForwardValidationStatus | null,
 ) {
   const { stopPrice, takeProfitPrice } = toStopAndTakeProfit(currentPrice, action, decision);
   const executionProfile = buildExecutionProfile(settings, decision);
@@ -756,7 +838,16 @@ async function executeTrade(
       actualEntryPrice: currentPrice,
       createdAt: new Date().toISOString(),
       feesEstimate: 0,
+      longModelId: modelIds.longModelId,
+      shortModelId: modelIds.shortModelId,
     },
+    forwardValidation: forwardValidation
+      ? {
+        allowsLiveEntries: forwardValidation.allowsLiveEntries,
+        sourceMode: forwardValidation.sourceMode,
+        reason: forwardValidation.reason,
+      }
+      : null,
   };
 
   if (paperMode) {
@@ -1060,9 +1151,15 @@ Deno.serve(async (req) => {
         results.push({ userId, action: "skipped", detail: "MEXC API keys are not configured" });
         continue;
       }
-      const models = manualSide
+      const forwardValidation = manualSide
+        ? null
+        : await loadForwardValidationStatus(supabaseAdmin, userId);
+      const loadedModels = manualSide
         ? { longModel: null, shortModel: null, longModelId: null, shortModelId: null }
         : await loadLatestSignalModels(supabaseAdmin, userId);
+      const models = !paperMode && !manualSide && !(forwardValidation?.allowsLiveEntries ?? false)
+        ? { longModel: null, shortModel: null, longModelId: null, shortModelId: null }
+        : loadedModels;
 
       const openTradeRecord = await getOpenTradeRecord(supabaseAdmin, userId);
       let hasPosition = false;
@@ -1109,6 +1206,13 @@ Deno.serve(async (req) => {
           microstructureHistory: modelMicrostructureHistory,
         });
         decision = await applyAiOverlay(keys, decision, marketState, manualSide);
+        if (!paperMode && !(forwardValidation?.allowsLiveEntries ?? false) && (decision.action === "long" || decision.action === "short")) {
+          decision = {
+            ...decision,
+            action: "hold",
+            reasoning: `${decision.reasoning} · live auto-entry locked until forward validation passes (${forwardValidation?.reason ?? "no recent report"})`,
+          };
+        }
       }
 
       const marketState = buildMarketState(
@@ -1145,6 +1249,7 @@ Deno.serve(async (req) => {
             longModelId: models.longModelId,
             shortModelId: models.shortModelId,
           },
+          forwardValidation,
           features: decision.features,
           risk: sessionRisk,
         },
@@ -1169,6 +1274,11 @@ Deno.serve(async (req) => {
           paperMode,
           keys,
           telegramId,
+          {
+            longModelId: models.longModelId,
+            shortModelId: models.shortModelId,
+          },
+          forwardValidation,
         );
         results.push({ userId, action: executionResult, detail: decision.reasoning });
         continue;

@@ -15,12 +15,13 @@ async function persistSnapshot(snapshot: Awaited<ReturnType<typeof fetchCrossVen
     return false;
   }
 
+  const storageSymbol = "BTCUSDT";
   const supabase = createClient(supabaseUrl, serviceRoleKey) as unknown as SupabaseWriter;
   const rows: Array<Record<string, unknown>> = [snapshot.primary, snapshot.secondary]
     .filter((entry) => entry !== null)
     .map((entry) => ({
       venue: entry!.venue,
-      symbol: entry!.symbol,
+      symbol: storageSymbol,
       snapshot_type: "venue",
       mid_price: entry!.midPrice,
       mark_price: entry!.markPrice,
@@ -41,7 +42,7 @@ async function persistSnapshot(snapshot: Awaited<ReturnType<typeof fetchCrossVen
   if (snapshot.microstructure) {
     rows.push({
       venue: "composite",
-      symbol: snapshot.symbol,
+      symbol: storageSymbol,
       snapshot_type: "microstructure",
       mid_price: snapshot.primary?.midPrice ?? snapshot.secondary?.midPrice ?? null,
       mark_price: snapshot.primary?.markPrice ?? snapshot.secondary?.markPrice ?? null,

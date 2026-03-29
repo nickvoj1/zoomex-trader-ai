@@ -19,7 +19,9 @@
     "research:sweep": "tsx scripts/quant/parameter-sweep.ts",
     "research:walk-forward": "tsx scripts/quant/walk-forward.ts",
     "research:train": "tsx scripts/quant/train-signal-model.ts",
-    "ops:daemon": "tsx scripts/quant/execution-daemon.ts"
+    "ops:archive": "tsx scripts/quant/archive-market-microstructure.ts",
+    "ops:daemon": "tsx scripts/quant/execution-daemon.ts",
+    "ops:forward-validate": "tsx scripts/quant/forward-validation-report.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",

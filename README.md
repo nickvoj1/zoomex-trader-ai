@@ -10,6 +10,8 @@ ScalpPro is a Supabase-backed React app for paper trading and controlled live ex
 - Live mode with authenticated MEXC account checks and order submission
 - Walk-forward optimization, parameter sweeps, and supervised signal-model training scripts
 - Execution-cycle logging, reconciliation, market snapshots, and transaction-cost analysis tables
+- Forward-validation reporting and live model gating based on real paper/live trade results
+- Dedicated order-book and trade-tick archive collection for deeper microstructure research
 
 ## Important limitations
 
@@ -35,6 +37,7 @@ The repository now has four concrete layers that were missing from the original 
 - `src/lib/quant-research.ts`: shared parameter search, walk-forward validation, and logistic model training code.
 - `scripts/quant/*.ts`: runnable research and execution workflows.
 - `supabase/migrations/20260328173000_add_quant_research_and_execution.sql`: persistent storage for market snapshots, research runs, model artifacts, reconciliations, execution events, and trade TCA.
+- `supabase/migrations/20260329113000_add_forward_validation_and_depth_archive.sql`: persistent storage for order-book snapshots, trade ticks, and forward-validation reports.
 
 ## Setup
 
@@ -127,17 +130,31 @@ Fetch cross-venue market snapshots:
 npm run research:market-data -- --iterations 10 --interval-ms 60000
 ```
 
+Archive deeper order-book and trade-tick samples:
+
+```bash
+npm run ops:archive -- --iterations 240 --interval-ms 15000
+```
+
+Generate forward-validation reports from real closed trades plus TCA:
+
+```bash
+npm run ops:forward-validate -- --user-id YOUR_USER_ID --lookback-days 14
+```
+
 Run the execution daemon:
 
 ```bash
 npm run ops:daemon -- --user-id YOUR_USER_ID
 ```
 
-The daemon expects `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`. If `BOT_USER_ID` is also set, it will reconcile that account, call the `scalper` function on a loop, persist market snapshots, and keep a Binance liquidation stream in memory for live crowding metrics.
+The daemon expects `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`. If `BOT_USER_ID` is also set, it will reconcile that account, call the `scalper` function on a loop, persist market snapshots, archive order-book and recent trade-tick samples, compute trade TCA, and write forward-validation reports that the live bot uses as an additional safety gate.
 
 If the daemon is running, the `scalper` function will also reuse the freshest stored liquidation metrics from `market_snapshots` so direct bot runs benefit from that crowding context.
 
 The training scripts now also pull historical `market_snapshots` from Supabase automatically when available, so the model can learn from more than candles alone.
+
+For live auto-trading, approved offline models are no longer enough on their own. The live path now also requires a recent forward-validation report to pass its gate; otherwise the strategy falls back to rule-based analysis and suppresses auto-entry until more evidence has been collected.
 
 ## Manual usage
 
@@ -179,3 +196,4 @@ curl -X POST \
 - Added live model-artifact confirmation/veto on top of the rule engine
 - Added dataset backfill, cleaning, gap handling, and data-quality reporting for research inputs
 - Added regime-aware model diagnostics, approval gates, and scheduled retraining support
+- Added persistent order-book/tick archive capture and forward-validation reports with live auto-entry gating
