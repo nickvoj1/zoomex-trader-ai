@@ -145,6 +145,34 @@ export async function createOpsAlert(
   }
 }
 
+export async function createOpsAlertWithinCooldown(
+  supabase: SupabaseAdmin,
+  payload: Parameters<typeof createOpsAlert>[1],
+  cooldownMs = 15 * 60_000,
+) {
+  const { data, error } = await supabase
+    .from("ops_alerts")
+    .select("created_at")
+    .eq("service_name", payload.serviceName)
+    .eq("symbol", payload.symbol ?? "BTCUSDT")
+    .eq("alert_type", payload.alertType)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    throw error;
+  }
+
+  const createdAt = data?.created_at ? Date.parse(data.created_at) : null;
+  if (createdAt !== null && Number.isFinite(createdAt) && Date.now() - createdAt < cooldownMs) {
+    return false;
+  }
+
+  await createOpsAlert(supabase, payload);
+  return true;
+}
+
 export async function fetchLatestHeartbeat(
   supabase: SupabaseAdmin,
   serviceName: string,

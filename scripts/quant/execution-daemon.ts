@@ -10,6 +10,7 @@ import {
   recordOpsHeartbeat,
   upsertOpsControl,
 } from "./live-ops";
+import { acquireProcessLock } from "./process-lock";
 import { booleanArg, numberArg, parseArgs, stringArg } from "./shared";
 
 interface QueryResult<T = unknown> {
@@ -348,6 +349,7 @@ async function main() {
   const archiveTradeLimit = numberArg(args, "archive-trade-limit", 1_000);
   const supabase = createClient(supabaseUrl, serviceRoleKey) as SupabaseAdmin;
   const liquidationCollector = createLiquidationCollector(enableLiquidations);
+  const lock = await acquireProcessLock(`ops-daemon-${symbol}`);
 
   try {
     let keepRunning = true;
@@ -537,6 +539,7 @@ async function main() {
     }
   } finally {
     liquidationCollector.close();
+    await lock.release();
   }
 }
 

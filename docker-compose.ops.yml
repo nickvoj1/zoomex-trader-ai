@@ -21,4 +21,16 @@ services:
     volumes:
       - ./research:/app/research
     command: >
-      sh -lc "npm run research:schedule -- --auto-prepare true --klines-dir /app/research/binance-vision/klines/$${OPS_SYMBOL:-BTCUSDT} --prepared-output $${OPS_DATASET_OUTPUT:-/app/research/datasets/BTCUSDT-1m-unified.csv} --snapshots-jsonl /app/research/live/market-snapshots-$${OPS_SYMBOL:-BTCUSDT}.jsonl --snapshots-output $${OPS_SNAPSHOTS_OUTPUT:-/app/research/datasets/BTCUSDT-market-snapshots.json} --every-minutes 240 --user-id $$BOT_USER_ID"
+      sh -lc "npm run research:schedule -- --auto-prepare true --klines-dir /app/research/binance-vision/klines/$${OPS_SYMBOL:-BTCUSDT} --aggtrades-dir $${OPS_AGGTRADES_DIR:-/app/research/binance-vision/aggTrades/BTCUSDT} --prepared-output $${OPS_DATASET_OUTPUT:-/app/research/datasets/BTCUSDT-1m-unified.csv} --snapshots-jsonl /app/research/live/market-snapshots-$${OPS_SYMBOL:-BTCUSDT}.jsonl --snapshots-output $${OPS_SNAPSHOTS_OUTPUT:-/app/research/datasets/BTCUSDT-market-snapshots.json} --every-minutes 240 --user-id $$BOT_USER_ID"
+
+  ops-monitor:
+    build:
+      context: .
+      dockerfile: Dockerfile.ops
+    restart: unless-stopped
+    env_file:
+      - .env.ops
+    volumes:
+      - ./research:/app/research
+    command: >
+      sh -lc "npm run ops:monitor -- --user-id $$BOT_USER_ID --symbol $${OPS_SYMBOL:-BTCUSDT}"

@@ -13,7 +13,7 @@ ScalpPro is a Supabase-backed React app for paper trading and controlled live ex
 - Forward-validation reporting and live model gating based on real paper/live trade results
 - Dedicated order-book and trade-tick archive collection for deeper microstructure research
 - Always-on ops deployment support with Docker Compose, heartbeats, alerts, and kill-switch controls
-- Automatic unified training-dataset preparation from downloaded Binance monthly archive files
+- Automatic unified training-dataset preparation from downloaded Binance monthly archive files, including aggTrade flow snapshots
 
 ## Important limitations
 
@@ -127,6 +127,12 @@ Build a unified training CSV automatically from downloaded Binance monthly archi
 npm run research:prepare -- --klines-dir /absolute/path/to/binance-vision/klines/BTCUSDT
 ```
 
+If you also have Binance monthly `aggTrades` archives, the prep step can fold them into minute-level trade-flow snapshots for the training pipeline:
+
+```bash
+npm run research:prepare -- --klines-dir /absolute/path/to/binance-vision/klines/BTCUSDT --aggtrades-dir /absolute/path/to/binance-vision/aggTrades/BTCUSDT --snapshots-jsonl /absolute/path/to/market-snapshots-BTCUSDT.jsonl
+```
+
 Run scheduled retraining from collected data:
 
 ```bash
@@ -136,7 +142,7 @@ npm run research:schedule -- --input /absolute/path/to/btcusdt-1m.csv --every-mi
 Run scheduled retraining with automatic dataset preparation from the archive folder:
 
 ```bash
-npm run research:schedule -- --auto-prepare true --klines-dir /absolute/path/to/binance-vision/klines/BTCUSDT --snapshots-jsonl /absolute/path/to/market-snapshots-BTCUSDT.jsonl --every-minutes 240
+npm run research:schedule -- --auto-prepare true --klines-dir /absolute/path/to/binance-vision/klines/BTCUSDT --aggtrades-dir /absolute/path/to/binance-vision/aggTrades/BTCUSDT --snapshots-jsonl /absolute/path/to/market-snapshots-BTCUSDT.jsonl --every-minutes 240
 ```
 
 Fetch cross-venue market snapshots:
@@ -171,6 +177,12 @@ npm run ops:daemon -- --user-id YOUR_USER_ID
 
 The daemon expects `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`. If `BOT_USER_ID` is also set, it will reconcile that account, call the `scalper` function on a loop, persist market snapshots, archive order-book and recent trade-tick samples, compute trade TCA, and write forward-validation reports that the live bot uses as an additional safety gate.
 
+Run the ops monitor:
+
+```bash
+npm run ops:monitor -- --user-id YOUR_USER_ID
+```
+
 If the daemon is running, the `scalper` function will also reuse the freshest stored liquidation metrics from `market_snapshots` so direct bot runs benefit from that crowding context.
 
 The training scripts now also pull historical `market_snapshots` from Supabase automatically when available, so the model can learn from more than candles alone.
@@ -191,6 +203,7 @@ Use those to keep two services running continuously on a server:
 
 - `ops-daemon`: collects market data, archives depth/ticks, reconciles positions, updates heartbeats, writes alerts, and calls `scalper`
 - `ops-research`: prepares the latest unified dataset, retrains on schedule, and compares research against forward-live results
+- `ops-monitor`: watches daemon heartbeats, market data freshness, research staleness, and forward-validation freshness, then auto-pauses or hard-stops live entries when needed
 
 Example:
 
@@ -198,6 +211,8 @@ Example:
 cp .env.ops.example .env.ops
 docker compose -f docker-compose.ops.yml up -d --build
 ```
+
+`ops-daemon`, `ops-research`, and `ops-monitor` now also take a local process lock so you do not accidentally run duplicate copies of the same worker on one machine.
 
 ## Manual usage
 
