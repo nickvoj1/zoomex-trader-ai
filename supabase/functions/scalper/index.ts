@@ -1246,8 +1246,8 @@ Deno.serve(async (req) => {
           },
           liquidationMetrics,
           models: {
-            longModelId: models.longModelId,
-            shortModelId: models.shortModelId,
+            longModelId: models.longModelId ?? null,
+            shortModelId: models.shortModelId ?? null,
           },
           forwardValidation,
           features: decision.features,
