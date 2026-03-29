@@ -337,6 +337,10 @@ export default function SettingsPage() {
                     </p>
                   ))}
                 </div>
+              ) : connectionResult.success ? (
+                <p className="mt-3 text-xs text-muted-foreground">
+                  No non-zero MEXC futures assets were returned for this account.
+                </p>
               ) : null}
             </div>
           )}

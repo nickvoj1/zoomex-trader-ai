@@ -441,9 +441,10 @@ export default function Dashboard() {
           return;
         }
 
-        setBalanceSnapshot(deriveBalanceSnapshot(result));
+        const nextSnapshot = deriveBalanceSnapshot(result);
+        setBalanceSnapshot(nextSnapshot);
         setIsDemoMode(result.mode === "paper");
-        setBalanceError(null);
+        setBalanceError(nextSnapshot ? null : (result.portfolio_valuation_error || "No non-zero MEXC futures assets returned"));
       } catch (error) {
         if (!active) return;
         setBalanceSnapshot(null);
@@ -535,7 +536,9 @@ export default function Dashboard() {
     : balanceSnapshot
       ? formatBalance(balanceSnapshot.total, balanceSnapshot.currency)
       : hasKeys
-        ? "Loading..."
+        ? balanceError
+          ? "No data"
+          : "Loading..."
         : "No keys";
   const accountDetail = isDemoMode
     ? balanceSnapshot
@@ -562,7 +565,11 @@ export default function Dashboard() {
                   ? formatBalance(balanceSnapshot.total, balanceSnapshot.currency)
                   : isDemoMode
                     ? `$${paperBalance.toFixed(2)}`
-                    : "Unavailable"}
+                    : hasKeys
+                      ? balanceError
+                        ? "No data"
+                        : "Loading..."
+                      : "No keys"}
               </p>
             </div>
             <div className="flex items-center gap-2">
