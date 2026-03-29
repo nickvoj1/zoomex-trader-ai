@@ -14,12 +14,37 @@ import {
   ForwardValidationTrade,
   mergeTradesWithTca,
 } from "../../src/lib/forward-validation";
+import { fetchLatestResearchRun, insertResearchRun } from "./supabase";
 
 type SupabaseAdmin = SupabaseClient;
 
 interface ArchiveCoverage {
   orderbookSnapshots: number;
   tradeTicks: number;
+}
+
+export interface OpsControlRow {
+  scope: string;
+  symbol: string;
+  kill_switch: boolean;
+  pause_new_entries: boolean;
+  disable_live_entries_until: string | null;
+  max_market_snapshot_age_seconds: number;
+  max_archive_sample_age_seconds: number;
+  max_heartbeat_age_seconds: number;
+  max_cycle_latency_ms: number;
+  notes: string | null;
+  updated_at: string;
+}
+
+interface OpsHeartbeatRow {
+  created_at: string;
+  service_name: string;
+  symbol: string;
+  status: string;
+  source_host: string | null;
+  process_id: string | null;
+  details: Record<string, unknown> | null;
 }
 
 function round(value: number, precision = 4) {
@@ -33,6 +58,112 @@ export function createSupabaseAdminFromEnv() {
     throw new Error("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required");
   }
   return createClient(supabaseUrl, serviceRoleKey);
+}
+
+export async function fetchOpsControl(
+  supabase: SupabaseAdmin,
+  symbol = "BTCUSDT",
+): Promise<OpsControlRow | null> {
+  const { data, error } = await supabase
+    .from("ops_controls")
+    .select(
+      "scope, symbol, kill_switch, pause_new_entries, disable_live_entries_until, max_market_snapshot_age_seconds, max_archive_sample_age_seconds, max_heartbeat_age_seconds, max_cycle_latency_ms, notes, updated_at",
+    )
+    .eq("scope", "global")
+    .eq("symbol", symbol)
+    .maybeSingle();
+
+  if (error) {
+    throw error;
+  }
+
+  return (data ?? null) as OpsControlRow | null;
+}
+
+export async function upsertOpsControl(
+  supabase: SupabaseAdmin,
+  symbol: string,
+  payload: Partial<OpsControlRow> & { notes?: string | null },
+) {
+  const { error } = await supabase.from("ops_controls").upsert({
+    scope: "global",
+    symbol,
+    ...payload,
+    updated_at: new Date().toISOString(),
+  }, { onConflict: "scope,symbol" });
+
+  if (error) {
+    throw error;
+  }
+}
+
+export async function recordOpsHeartbeat(
+  supabase: SupabaseAdmin,
+  payload: {
+    serviceName: string;
+    symbol?: string;
+    status: string;
+    details?: Record<string, unknown>;
+  },
+) {
+  const { error } = await supabase.from("ops_heartbeats").insert({
+    service_name: payload.serviceName,
+    symbol: payload.symbol ?? "BTCUSDT",
+    status: payload.status,
+    source_host: process.env.HOSTNAME ?? null,
+    process_id: String(process.pid),
+    details: payload.details ?? {},
+  });
+
+  if (error) {
+    throw error;
+  }
+}
+
+export async function createOpsAlert(
+  supabase: SupabaseAdmin,
+  payload: {
+    serviceName: string;
+    symbol?: string;
+    severity: "info" | "warning" | "critical";
+    alertType: string;
+    message: string;
+    details?: Record<string, unknown>;
+  },
+) {
+  const { error } = await supabase.from("ops_alerts").insert({
+    service_name: payload.serviceName,
+    symbol: payload.symbol ?? "BTCUSDT",
+    severity: payload.severity,
+    alert_type: payload.alertType,
+    message: payload.message,
+    details: payload.details ?? {},
+  });
+
+  if (error) {
+    throw error;
+  }
+}
+
+export async function fetchLatestHeartbeat(
+  supabase: SupabaseAdmin,
+  serviceName: string,
+  symbol = "BTCUSDT",
+): Promise<OpsHeartbeatRow | null> {
+  const { data, error } = await supabase
+    .from("ops_heartbeats")
+    .select("created_at, service_name, symbol, status, source_host, process_id, details")
+    .eq("service_name", serviceName)
+    .eq("symbol", symbol)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    throw error;
+  }
+
+  return (data ?? null) as OpsHeartbeatRow | null;
 }
 
 function orderBookInsertRow(snapshot: ArchivedOrderBookSnapshot, canonicalSymbol: string) {
@@ -185,6 +316,7 @@ interface ForwardValidationReportRow {
   window_end: string;
   execution_mode: string;
   trade_count: number;
+  win_rate: number;
   gate_passed: boolean;
   gate_reason: string | null;
 }
@@ -197,7 +329,7 @@ export async function fetchLatestForwardValidationReports(
 ) {
   const { data, error } = await supabase
     .from("forward_validation_reports")
-    .select("id, created_at, window_end, execution_mode, trade_count, gate_passed, gate_reason")
+    .select("id, created_at, window_end, execution_mode, trade_count, win_rate, gate_passed, gate_reason")
     .eq("user_id", userId)
     .eq("symbol", symbol)
     .order("created_at", { ascending: false })
@@ -325,4 +457,77 @@ export async function buildAndPersistForwardValidationReports(
   }
 
   return reports;
+}
+
+export async function compareResearchVsForwardValidation(
+  supabase: SupabaseAdmin,
+  options: {
+    userId: string;
+    symbol?: string;
+    persist?: boolean;
+  },
+) {
+  const symbol = options.symbol ?? "BTCUSDT";
+  const latestResearchRun = await fetchLatestResearchRun({
+    userId: options.userId,
+    runType: "research_cycle",
+    symbol,
+  });
+  if (!latestResearchRun) {
+    return null;
+  }
+
+  const reports = await fetchLatestForwardValidationReports(supabase, options.userId, symbol, 8);
+  const paper = reports.find((row) => row.execution_mode === "paper") ?? null;
+  const live = reports.find((row) => row.execution_mode === "live") ?? null;
+  const summary = (latestResearchRun.summary ?? {}) as Record<string, unknown>;
+  const walkForward = (summary.walkForward ?? {}) as Record<string, unknown>;
+  const bestSweepResult = (summary.bestSweepResult ?? {}) as Record<string, unknown>;
+  const walkForwardWinRate = Number(walkForward.winRate ?? 0);
+  const walkForwardTrades = Number(walkForward.trades ?? 0);
+  const walkForwardTotalPnl = Number(walkForward.totalTestPnl ?? 0);
+  const bestSweepWinRate = Number(bestSweepResult.winRate ?? 0);
+
+  const comparison = {
+    createdAt: new Date().toISOString(),
+    sourceResearchRunId: latestResearchRun.id ?? null,
+    sourceResearchCreatedAt: latestResearchRun.created_at ?? null,
+    walkForward: {
+      winRate: walkForwardWinRate,
+      trades: walkForwardTrades,
+      totalTestPnl: walkForwardTotalPnl,
+      bestSweepWinRate,
+    },
+    forwardValidation: {
+      paper,
+      live,
+    },
+    deltas: {
+      paperWinRateVsWalkForward: paper ? round(paper.win_rate - walkForwardWinRate, 4) : null,
+      liveWinRateVsWalkForward: live ? round(live.win_rate - walkForwardWinRate, 4) : null,
+      paperTradeCoverageVsWalkForward: paper ? round(paper.trade_count - walkForwardTrades, 4) : null,
+      liveTradeCoverageVsWalkForward: live ? round(live.trade_count - walkForwardTrades, 4) : null,
+    },
+    status: live
+      ? live.gate_passed ? "live_confirmed" : "live_underperforming"
+      : paper
+        ? paper.gate_passed ? "paper_confirmed" : "paper_underperforming"
+        : "awaiting_forward_validation",
+  };
+
+  if (options.persist !== false) {
+    await insertResearchRun({
+      user_id: options.userId,
+      run_type: "research_live_comparison",
+      symbol,
+      objective: "monitoring",
+      config: {
+        sourceResearchRunId: latestResearchRun.id ?? null,
+      },
+      summary: comparison,
+      artifact_path: null,
+    }).catch(() => null);
+  }
+
+  return comparison;
 }

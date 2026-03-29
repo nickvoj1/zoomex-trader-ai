@@ -12,6 +12,8 @@ ScalpPro is a Supabase-backed React app for paper trading and controlled live ex
 - Execution-cycle logging, reconciliation, market snapshots, and transaction-cost analysis tables
 - Forward-validation reporting and live model gating based on real paper/live trade results
 - Dedicated order-book and trade-tick archive collection for deeper microstructure research
+- Always-on ops deployment support with Docker Compose, heartbeats, alerts, and kill-switch controls
+- Automatic unified training-dataset preparation from downloaded Binance monthly archive files
 
 ## Important limitations
 
@@ -38,6 +40,7 @@ The repository now has four concrete layers that were missing from the original 
 - `scripts/quant/*.ts`: runnable research and execution workflows.
 - `supabase/migrations/20260328173000_add_quant_research_and_execution.sql`: persistent storage for market snapshots, research runs, model artifacts, reconciliations, execution events, and trade TCA.
 - `supabase/migrations/20260329113000_add_forward_validation_and_depth_archive.sql`: persistent storage for order-book snapshots, trade ticks, and forward-validation reports.
+- `supabase/migrations/20260329142000_add_ops_monitoring_and_controls.sql`: persistent storage for ops controls, daemon heartbeats, and alerts.
 
 ## Setup
 
@@ -118,10 +121,22 @@ Run the full research cycle in one shot:
 npm run research:cycle -- --input /absolute/path/to/btcusdt-1m.csv
 ```
 
+Build a unified training CSV automatically from downloaded Binance monthly archives:
+
+```bash
+npm run research:prepare -- --klines-dir /absolute/path/to/binance-vision/klines/BTCUSDT
+```
+
 Run scheduled retraining from collected data:
 
 ```bash
 npm run research:schedule -- --input /absolute/path/to/btcusdt-1m.csv --every-minutes 240
+```
+
+Run scheduled retraining with automatic dataset preparation from the archive folder:
+
+```bash
+npm run research:schedule -- --auto-prepare true --klines-dir /absolute/path/to/binance-vision/klines/BTCUSDT --snapshots-jsonl /absolute/path/to/market-snapshots-BTCUSDT.jsonl --every-minutes 240
 ```
 
 Fetch cross-venue market snapshots:
@@ -142,6 +157,12 @@ Generate forward-validation reports from real closed trades plus TCA:
 npm run ops:forward-validate -- --user-id YOUR_USER_ID --lookback-days 14
 ```
 
+Compare the latest research cycle against forward-paper/live results:
+
+```bash
+npm run research:compare -- --user-id YOUR_USER_ID --lookback-days 14
+```
+
 Run the execution daemon:
 
 ```bash
@@ -155,6 +176,28 @@ If the daemon is running, the `scalper` function will also reuse the freshest st
 The training scripts now also pull historical `market_snapshots` from Supabase automatically when available, so the model can learn from more than candles alone.
 
 For live auto-trading, approved offline models are no longer enough on their own. The live path now also requires a recent forward-validation report to pass its gate; otherwise the strategy falls back to rule-based analysis and suppresses auto-entry until more evidence has been collected.
+
+The live path also checks the ops control plane before allowing new live entries. A stale daemon heartbeat, a temporary ops pause, or a kill switch in `ops_controls` will block new live entries while still allowing close logic.
+
+## Always-On Server
+
+The repo now includes:
+
+- `Dockerfile.ops`
+- `docker-compose.ops.yml`
+- `.env.ops.example`
+
+Use those to keep two services running continuously on a server:
+
+- `ops-daemon`: collects market data, archives depth/ticks, reconciles positions, updates heartbeats, writes alerts, and calls `scalper`
+- `ops-research`: prepares the latest unified dataset, retrains on schedule, and compares research against forward-live results
+
+Example:
+
+```bash
+cp .env.ops.example .env.ops
+docker compose -f docker-compose.ops.yml up -d --build
+```
 
 ## Manual usage
 
@@ -197,3 +240,4 @@ curl -X POST \
 - Added dataset backfill, cleaning, gap handling, and data-quality reporting for research inputs
 - Added regime-aware model diagnostics, approval gates, and scheduled retraining support
 - Added persistent order-book/tick archive capture and forward-validation reports with live auto-entry gating
+- Added server-ready ops packaging, kill-switch controls, daemon heartbeats/alerts, automatic archive-to-training dataset prep, and live-vs-research comparison reporting

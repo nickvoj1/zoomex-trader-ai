@@ -3,7 +3,12 @@ import { fetchCrossVenueSnapshot } from "../../src/lib/market-intel";
 import { getOpenPositions } from "../../supabase/functions/_shared/mexc";
 import {
   buildAndPersistForwardValidationReports,
+  compareResearchVsForwardValidation,
+  createOpsAlert,
+  fetchOpsControl,
   persistMicrostructureArchiveSample,
+  recordOpsHeartbeat,
+  upsertOpsControl,
 } from "./live-ops";
 import { booleanArg, numberArg, parseArgs, stringArg } from "./shared";
 
@@ -41,6 +46,10 @@ function round(value: number, precision = 4) {
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function pauseUntilIso(minutes: number) {
+  return new Date(Date.now() + minutes * 60_000).toISOString();
 }
 
 function computeLiquidationMetrics(events: LiquidationEvent[], lookbackMs: number) {
@@ -344,87 +353,181 @@ async function main() {
     let keepRunning = true;
     while (keepRunning) {
       const cycleStartedAt = Date.now();
-      const liquidationMetrics = liquidationCollector.getMetrics();
-      const snapshot = await fetchCrossVenueSnapshot({
-        mexcSymbol: "BTC_USDT",
-        binanceSymbol: symbol,
-        liquidationMetrics,
-      });
-      await insertMarketSnapshot(supabase, snapshot, symbol);
-      const archiveSummary = await persistMicrostructureArchiveSample(supabase, {
-        symbol,
-        mexcSymbol: "BTC_USDT",
-        binanceSymbol: symbol,
-        depthLimit: archiveDepthLimit,
-        tradeLimit: archiveTradeLimit,
-      }).catch((error) => {
-        console.error("microstructure archive persist failed:", error instanceof Error ? error.message : error);
-        return null;
-      });
-
-      const scalper = await callScalper(scalperUrl, serviceRoleKey, userId);
-      await insertExecutionEvent(supabase, {
-        user_id: userId ?? null,
-        venue: "supabase",
-        symbol,
-        event_type: "decision_cycle",
-        status: scalper.ok ? "success" : "error",
-        latency_ms: scalper.latencyMs,
-        details: {
-          response: scalper.body,
-          marketSnapshot: {
-            crossVenueBasisBps: snapshot.microstructure?.crossVenueBasisBps ?? null,
-            spreadBps: snapshot.microstructure?.primaryBook?.spreadBps ?? null,
-            liquidationMetrics,
-          },
-        },
-      });
-
-      if (userId) {
-        const reconciliation = await reconcilePositions(supabase, userId, symbol);
-        await insertExecutionEvent(supabase, {
-          user_id: userId,
-          venue: "mexc",
-          symbol,
-          event_type: "position_reconciliation",
-          status: reconciliation.status,
-          latency_ms: Date.now() - cycleStartedAt,
-          details: reconciliation,
+      try {
+        const control = await fetchOpsControl(supabase, symbol).catch(() => null);
+        const liquidationMetrics = liquidationCollector.getMetrics();
+        const snapshot = await fetchCrossVenueSnapshot({
+          mexcSymbol: "BTC_USDT",
+          binanceSymbol: symbol,
+          liquidationMetrics,
         });
-        await analyzeTradeCosts(supabase, userId, symbol);
-        const forwardReports = await buildAndPersistForwardValidationReports(supabase, {
-          userId,
+        await insertMarketSnapshot(supabase, snapshot, symbol);
+        const archiveSummary = await persistMicrostructureArchiveSample(supabase, {
           symbol,
-          lookbackDays: forwardLookbackDays,
-          startingBalanceUsd,
-          includeEmpty: false,
+          mexcSymbol: "BTC_USDT",
+          binanceSymbol: symbol,
+          depthLimit: archiveDepthLimit,
+          tradeLimit: archiveTradeLimit,
         }).catch((error) => {
-          console.error("forward validation report failed:", error instanceof Error ? error.message : error);
-          return [];
+          console.error("microstructure archive persist failed:", error instanceof Error ? error.message : error);
+          return null;
         });
-        if (forwardReports.length > 0) {
+
+        const scalper = await callScalper(scalperUrl, serviceRoleKey, userId);
+        await insertExecutionEvent(supabase, {
+          user_id: userId ?? null,
+          venue: "supabase",
+          symbol,
+          event_type: "decision_cycle",
+          status: scalper.ok ? "success" : "error",
+          latency_ms: scalper.latencyMs,
+          details: {
+            response: scalper.body,
+            marketSnapshot: {
+              crossVenueBasisBps: snapshot.microstructure?.crossVenueBasisBps ?? null,
+              spreadBps: snapshot.microstructure?.primaryBook?.spreadBps ?? null,
+              liquidationMetrics,
+            },
+          },
+        });
+
+        if (userId) {
+          const reconciliation = await reconcilePositions(supabase, userId, symbol);
           await insertExecutionEvent(supabase, {
             user_id: userId,
-            venue: "supabase",
+            venue: "mexc",
             symbol,
-            event_type: "forward_validation",
-            status: forwardReports.every((report) => report.gatePassed) ? "success" : "warning",
+            event_type: "position_reconciliation",
+            status: reconciliation.status,
             latency_ms: Date.now() - cycleStartedAt,
-            details: {
-              reports: forwardReports,
-            },
+            details: reconciliation,
           });
+          await analyzeTradeCosts(supabase, userId, symbol);
+          const forwardReports = await buildAndPersistForwardValidationReports(supabase, {
+            userId,
+            symbol,
+            lookbackDays: forwardLookbackDays,
+            startingBalanceUsd,
+            includeEmpty: false,
+          }).catch((error) => {
+            console.error("forward validation report failed:", error instanceof Error ? error.message : error);
+            return [];
+          });
+          if (forwardReports.length > 0) {
+            await insertExecutionEvent(supabase, {
+              user_id: userId,
+              venue: "supabase",
+              symbol,
+              event_type: "forward_validation",
+              status: forwardReports.every((report) => report.gatePassed) ? "success" : "warning",
+              latency_ms: Date.now() - cycleStartedAt,
+              details: {
+                reports: forwardReports,
+              },
+            });
+          }
+
+          const comparison = await compareResearchVsForwardValidation(supabase, {
+            userId,
+            symbol,
+          }).catch(() => null);
+          if (comparison) {
+            await insertExecutionEvent(supabase, {
+              user_id: userId,
+              venue: "supabase",
+              symbol,
+              event_type: "research_live_comparison",
+              status: comparison.status,
+              latency_ms: Date.now() - cycleStartedAt,
+              details: comparison,
+            });
+          }
+        }
+
+        const cycleLatencyMs = Date.now() - cycleStartedAt;
+        const thresholdLatencyMs = control?.max_cycle_latency_ms ?? 20_000;
+        if (!snapshot.primary || !snapshot.secondary || !scalper.ok || archiveSummary === null || cycleLatencyMs > thresholdLatencyMs) {
+          await createOpsAlert(supabase, {
+            serviceName: "ops-daemon",
+            symbol,
+            severity: cycleLatencyMs > thresholdLatencyMs || !scalper.ok || !snapshot.primary || !snapshot.secondary ? "critical" : "warning",
+            alertType: !snapshot.primary || !snapshot.secondary
+              ? "stale_market_data"
+              : !scalper.ok
+                ? "scalper_error"
+                : cycleLatencyMs > thresholdLatencyMs
+                  ? "cycle_latency"
+                  : "archive_gap",
+            message: !snapshot.primary || !snapshot.secondary
+              ? "cross-venue market data is incomplete"
+              : !scalper.ok
+              ? `scalper returned ${scalper.status}`
+              : cycleLatencyMs > thresholdLatencyMs
+                ? `daemon cycle latency ${cycleLatencyMs}ms exceeded ${thresholdLatencyMs}ms`
+                : "microstructure archive write failed",
+            details: {
+              scalperStatus: scalper.status,
+              cycleLatencyMs,
+              archiveSummary,
+            },
+          }).catch(() => null);
+          await upsertOpsControl(supabase, symbol, {
+            disable_live_entries_until: pauseUntilIso(15),
+            notes: `Auto-paused by ops-daemon at ${new Date().toISOString()}`,
+          }).catch(() => null);
+        }
+
+        await recordOpsHeartbeat(supabase, {
+          serviceName: "ops-daemon",
+          symbol,
+          status: scalper.ok ? "ok" : "degraded",
+          details: {
+            cycleLatencyMs,
+            scalperStatus: scalper.status,
+            archiveOrderbookInserted: archiveSummary?.orderbookInserted ?? null,
+            archiveTradeTicksUpserted: archiveSummary?.tradeTicksUpserted ?? null,
+            crossVenueBasisBps: snapshot.microstructure?.crossVenueBasisBps ?? null,
+          },
+        }).catch(() => null);
+
+        console.log(JSON.stringify({
+          timestamp: new Date().toISOString(),
+          latencyMs: cycleLatencyMs,
+          crossVenueBasisBps: snapshot.microstructure?.crossVenueBasisBps ?? null,
+          scalperStatus: scalper.status,
+          archiveOrderbookInserted: archiveSummary?.orderbookInserted ?? null,
+          archiveTradeTicksUpserted: archiveSummary?.tradeTicksUpserted ?? null,
+        }, null, 2));
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error("ops-daemon cycle failed:", message);
+        await createOpsAlert(supabase, {
+          serviceName: "ops-daemon",
+          symbol,
+          severity: "critical",
+          alertType: "cycle_failure",
+          message,
+          details: {
+            cycleStartedAt: new Date(cycleStartedAt).toISOString(),
+          },
+        }).catch(() => null);
+        await recordOpsHeartbeat(supabase, {
+          serviceName: "ops-daemon",
+          symbol,
+          status: "error",
+          details: {
+            message,
+          },
+        }).catch(() => null);
+        await upsertOpsControl(supabase, symbol, {
+          disable_live_entries_until: pauseUntilIso(30),
+          notes: `Auto-paused after daemon failure: ${message}`,
+        }).catch(() => null);
+
+        if (once) {
+          throw error;
         }
       }
-
-      console.log(JSON.stringify({
-        timestamp: new Date().toISOString(),
-        latencyMs: Date.now() - cycleStartedAt,
-        crossVenueBasisBps: snapshot.microstructure?.crossVenueBasisBps ?? null,
-        scalperStatus: scalper.status,
-        archiveOrderbookInserted: archiveSummary?.orderbookInserted ?? null,
-        archiveTradeTicksUpserted: archiveSummary?.tradeTicksUpserted ?? null,
-      }, null, 2));
 
       if (once) {
         keepRunning = false;

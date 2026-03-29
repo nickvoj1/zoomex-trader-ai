@@ -127,6 +127,25 @@ interface ForwardValidationStatus {
   reason: string;
 }
 
+interface OpsControlRow {
+  kill_switch: boolean;
+  pause_new_entries: boolean;
+  disable_live_entries_until: string | null;
+  max_heartbeat_age_seconds: number;
+  notes: string | null;
+}
+
+interface OpsHeartbeatRow {
+  created_at: string;
+  status: string;
+}
+
+interface OpsEntryGuard {
+  allowsLiveEntries: boolean;
+  reason: string;
+  heartbeatAgeSeconds: number | null;
+}
+
 interface ArtifactEligibilityLike {
   approved?: boolean;
   score?: number;
@@ -544,6 +563,99 @@ async function loadForwardValidationStatus(
   }
 
   return fallback;
+}
+
+async function loadOpsEntryGuard(
+  supabaseAdmin: ReturnType<typeof createAdminClient>,
+): Promise<OpsEntryGuard> {
+  const fallback: OpsEntryGuard = {
+    allowsLiveEntries: false,
+    reason: "ops control state unavailable",
+    heartbeatAgeSeconds: null,
+  };
+
+  const { data: controlData, error: controlError } = await supabaseAdmin
+    .from("ops_controls")
+    .select("kill_switch, pause_new_entries, disable_live_entries_until, max_heartbeat_age_seconds, notes")
+    .eq("scope", "global")
+    .eq("symbol", DB_SYMBOL)
+    .maybeSingle();
+  if (controlError) {
+    console.error("Failed to load ops control:", controlError);
+    return fallback;
+  }
+
+  const control = (controlData ?? null) as OpsControlRow | null;
+  if (control?.kill_switch) {
+    return {
+      allowsLiveEntries: false,
+      reason: control.notes ?? "global kill switch enabled",
+      heartbeatAgeSeconds: null,
+    };
+  }
+
+  const disabledUntil = control?.disable_live_entries_until ? Date.parse(control.disable_live_entries_until) : null;
+  if (disabledUntil && Number.isFinite(disabledUntil) && disabledUntil > Date.now()) {
+    return {
+      allowsLiveEntries: false,
+      reason: control?.notes ?? `live entries paused until ${control.disable_live_entries_until}`,
+      heartbeatAgeSeconds: null,
+    };
+  }
+
+  if (control?.pause_new_entries) {
+    return {
+      allowsLiveEntries: false,
+      reason: control.notes ?? "new live entries paused by ops control",
+      heartbeatAgeSeconds: null,
+    };
+  }
+
+  const { data: heartbeatData, error: heartbeatError } = await supabaseAdmin
+    .from("ops_heartbeats")
+    .select("created_at, status")
+    .eq("service_name", "ops-daemon")
+    .eq("symbol", DB_SYMBOL)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (heartbeatError) {
+    console.error("Failed to load ops heartbeat:", heartbeatError);
+    return fallback;
+  }
+
+  const heartbeat = (heartbeatData ?? null) as OpsHeartbeatRow | null;
+  if (!heartbeat?.created_at) {
+    return {
+      allowsLiveEntries: false,
+      reason: "ops-daemon heartbeat missing",
+      heartbeatAgeSeconds: null,
+    };
+  }
+
+  const heartbeatAgeSeconds = (Date.now() - Date.parse(heartbeat.created_at)) / 1000;
+  const maxHeartbeatAgeSeconds = control?.max_heartbeat_age_seconds ?? 180;
+  if (!Number.isFinite(heartbeatAgeSeconds) || heartbeatAgeSeconds > maxHeartbeatAgeSeconds) {
+    return {
+      allowsLiveEntries: false,
+      reason: `ops-daemon heartbeat stale (${Math.round(heartbeatAgeSeconds)}s old)`,
+      heartbeatAgeSeconds: Number.isFinite(heartbeatAgeSeconds) ? Math.round(heartbeatAgeSeconds) : null,
+    };
+  }
+
+  if (heartbeat.status !== "ok" && heartbeat.status !== "degraded") {
+    return {
+      allowsLiveEntries: false,
+      reason: `ops-daemon heartbeat status ${heartbeat.status}`,
+      heartbeatAgeSeconds: Math.round(heartbeatAgeSeconds),
+    };
+  }
+
+  return {
+    allowsLiveEntries: true,
+    reason: "ops control checks passed",
+    heartbeatAgeSeconds: Math.round(heartbeatAgeSeconds),
+  };
 }
 
 function applyModelOverlay(
@@ -1151,13 +1263,23 @@ Deno.serve(async (req) => {
         results.push({ userId, action: "skipped", detail: "MEXC API keys are not configured" });
         continue;
       }
+      const opsGuard = !paperMode
+        ? await loadOpsEntryGuard(supabaseAdmin)
+        : {
+          allowsLiveEntries: true,
+          reason: "paper mode bypasses ops live-entry guard",
+          heartbeatAgeSeconds: null,
+        };
       const forwardValidation = manualSide
         ? null
         : await loadForwardValidationStatus(supabaseAdmin, userId);
       const loadedModels = manualSide
         ? { longModel: null, shortModel: null, longModelId: null, shortModelId: null }
         : await loadLatestSignalModels(supabaseAdmin, userId);
-      const models = !paperMode && !manualSide && !(forwardValidation?.allowsLiveEntries ?? false)
+      const models = !paperMode && !manualSide && (
+        !(forwardValidation?.allowsLiveEntries ?? false) ||
+        !opsGuard.allowsLiveEntries
+      )
         ? { longModel: null, shortModel: null, longModelId: null, shortModelId: null }
         : loadedModels;
 
@@ -1213,6 +1335,21 @@ Deno.serve(async (req) => {
             reasoning: `${decision.reasoning} · live auto-entry locked until forward validation passes (${forwardValidation?.reason ?? "no recent report"})`,
           };
         }
+        if (!paperMode && !opsGuard.allowsLiveEntries && (decision.action === "long" || decision.action === "short")) {
+          decision = {
+            ...decision,
+            action: "hold",
+            reasoning: `${decision.reasoning} · ops guard blocked live entry (${opsGuard.reason})`,
+          };
+        }
+      }
+
+      if (!paperMode && manualSide && manualSide !== "close" && !opsGuard.allowsLiveEntries) {
+        decision = {
+          ...decision,
+          action: "hold",
+          reasoning: `${decision.reasoning} · ops guard blocked manual live entry (${opsGuard.reason})`,
+        };
       }
 
       const marketState = buildMarketState(
@@ -1249,6 +1386,7 @@ Deno.serve(async (req) => {
             longModelId: models.longModelId ?? null,
             shortModelId: models.shortModelId ?? null,
           },
+          opsGuard,
           forwardValidation,
           features: decision.features,
           risk: sessionRisk,
