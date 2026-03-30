@@ -101,6 +101,16 @@ export function csvBooleanArg(args: Args, key: string, fallback: boolean[]) {
   return values.length > 0 ? values : fallback;
 }
 
+export function csvStringArg(args: Args, key: string, fallback: string[] = []) {
+  const raw = stringArg(args, key);
+  if (!raw) return fallback;
+  const values = raw
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  return values.length > 0 ? values : fallback;
+}
+
 function isMinuteAlignedGap(deltaMs: number, intervalMs: number) {
   if (deltaMs <= intervalMs) return 0;
   const rawBars = deltaMs / intervalMs;
@@ -347,6 +357,16 @@ export async function loadMicrostructureHistoryFromJson(filePath: string): Promi
   }
 
   return prepareHistoricalMicrostructure(history);
+}
+
+export async function loadMicrostructureHistoryFromJsonFiles(filePaths: string[]): Promise<HistoricalMicrostructureSnapshot[]> {
+  const uniquePaths = [...new Set(filePaths.map((filePath) => filePath.trim()).filter(Boolean))];
+  if (uniquePaths.length === 0) {
+    return [];
+  }
+
+  const histories = await Promise.all(uniquePaths.map((filePath) => loadMicrostructureHistoryFromJson(filePath)));
+  return prepareHistoricalMicrostructure(histories.flat());
 }
 
 export async function ensureParentDirectory(filePath: string) {

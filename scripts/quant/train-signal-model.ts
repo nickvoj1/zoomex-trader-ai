@@ -1,8 +1,9 @@
 import { trainLogisticModel } from "../../src/lib/quant-research";
 import {
+  csvStringArg,
   defaultStrategySettings,
   loadCandleDatasetFromCsv,
-  loadMicrostructureHistoryFromJson,
+  loadMicrostructureHistoryFromJsonFiles,
   numberArg,
   parseArgs,
   stringArg,
@@ -16,12 +17,12 @@ async function trainSide(input: string, side: "long" | "short", output: string) 
   const candles = dataset.candles;
   const settings = defaultStrategySettings();
   const args = parseArgs(process.argv.slice(2));
-  const snapshotsFile = stringArg(args, "snapshots-file");
+  const snapshotsFiles = csvStringArg(args, "snapshots-file");
   const firstCandle = candles[0];
   const lastCandle = candles.length > 0 ? candles[candles.length - 1] : undefined;
   const startAt = firstCandle?.timestamp ? new Date(firstCandle.timestamp - 30 * 60_000).toISOString() : undefined;
   const endAt = lastCandle?.timestamp ? new Date(lastCandle.timestamp + 60_000).toISOString() : undefined;
-  const fileHistory = snapshotsFile ? await loadMicrostructureHistoryFromJson(snapshotsFile) : [];
+  const fileHistory = snapshotsFiles.length > 0 ? await loadMicrostructureHistoryFromJsonFiles(snapshotsFiles) : [];
   const supabaseHistory = await fetchHistoricalMicrostructureSnapshots({
     symbol: "BTCUSDT",
     startAt,

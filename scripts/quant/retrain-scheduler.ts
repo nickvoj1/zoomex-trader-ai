@@ -91,7 +91,7 @@ async function main() {
         const prepared = await buildUnifiedTrainingDataset({
           klinesDir,
           aggTradesDir,
-          historicalSnapshotsFile,
+          historicalSnapshotsFiles: historicalSnapshotsFile ? historicalSnapshotsFile.split(",").map((value) => value.trim()).filter(Boolean) : undefined,
           output: preparedOutput,
           reportPath: preparedReport,
           snapshotsJsonl: snapshotsJsonl ?? undefined,
@@ -107,7 +107,7 @@ async function main() {
       const cycleOptions = {
         input,
         userId,
-        snapshotsFile,
+        snapshotsFiles: snapshotsFile ? snapshotsFile.split(",").map((value) => value.trim()).filter(Boolean) : [],
         microstructureLookbackMinutes: numberArg(args, "micro-lookback-minutes", 15),
         limit: numberArg(args, "limit", 72),
         trainingCandles: numberArg(args, "training-candles", 8_000),

@@ -356,7 +356,7 @@ export async function buildUnifiedTrainingDataset(options: {
   output: string;
   reportPath?: string;
   snapshotsJsonl?: string;
-  historicalSnapshotsFile?: string;
+  historicalSnapshotsFiles?: string[];
   aggTradesDir?: string;
   snapshotsOutput?: string;
   intervalMs?: number;
@@ -419,25 +419,27 @@ export async function buildUnifiedTrainingDataset(options: {
       snapshotSources.push("live-jsonl");
     }
   }
-  if (options.historicalSnapshotsFile) {
-    const historicalSnapshots = await loadSnapshotsFromJsonFile(options.historicalSnapshotsFile);
-    for (const snapshot of historicalSnapshots) {
-      if (!snapshot || typeof snapshot !== "object") continue;
-      const record = snapshot as Record<string, unknown>;
-      const timestamp = parseSnapshotTimestamp(record);
-      const microstructure = record.microstructure && typeof record.microstructure === "object"
-        ? record.microstructure as unknown as MarketMicrostructure
-        : null;
-      if (timestamp === null) continue;
-      mergedSnapshots.push({
-        timestamp,
-        source: typeof record.source === "string" ? record.source : "historical-json",
-        microstructure,
-        rawPayload: record,
-      });
-    }
-    if (historicalSnapshots.length > 0) {
-      snapshotSources.push("historical-json");
+  if (options.historicalSnapshotsFiles && options.historicalSnapshotsFiles.length > 0) {
+    for (const historicalSnapshotsFile of options.historicalSnapshotsFiles) {
+      const historicalSnapshots = await loadSnapshotsFromJsonFile(historicalSnapshotsFile);
+      for (const snapshot of historicalSnapshots) {
+        if (!snapshot || typeof snapshot !== "object") continue;
+        const record = snapshot as Record<string, unknown>;
+        const timestamp = parseSnapshotTimestamp(record);
+        const microstructure = record.microstructure && typeof record.microstructure === "object"
+          ? record.microstructure as unknown as MarketMicrostructure
+          : null;
+        if (timestamp === null) continue;
+        mergedSnapshots.push({
+          timestamp,
+          source: typeof record.source === "string" ? record.source : "historical-json",
+          microstructure,
+          rawPayload: record,
+        });
+      }
+      if (historicalSnapshots.length > 0) {
+        snapshotSources.push("historical-json");
+      }
     }
   }
   if (options.aggTradesDir) {

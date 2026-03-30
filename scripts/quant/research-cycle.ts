@@ -8,12 +8,13 @@ import {
   walkForwardOptimize,
 } from "../../src/lib/quant-research.ts";
 import {
+  csvStringArg,
   csvBooleanArg,
   csvNumberArg,
   defaultStrategySettings,
   ensureParentDirectory,
   loadCandleDatasetFromCsv,
-  loadMicrostructureHistoryFromJson,
+  loadMicrostructureHistoryFromJsonFiles,
   numberArg,
   parseArgs,
   stringArg,
@@ -30,7 +31,7 @@ export interface ResearchCycleOptions {
   input: string;
   outputDir?: string;
   userId?: string | null;
-  snapshotsFile?: string;
+  snapshotsFiles?: string[];
   microstructureLookbackMinutes?: number;
   limit?: number;
   trainingCandles?: number;
@@ -56,12 +57,12 @@ export async function runResearchCycle(options: ResearchCycleOptions): Promise<R
   const userId = options.userId ?? null;
   const dataset = await loadCandleDatasetFromCsv(options.input);
   const candles = dataset.candles;
-  const snapshotsFile = options.snapshotsFile;
+  const snapshotsFiles = options.snapshotsFiles ?? [];
   const firstCandle = candles[0];
   const lastCandle = candles.length > 0 ? candles[candles.length - 1] : undefined;
   const startAt = firstCandle?.timestamp ? new Date(firstCandle.timestamp - 30 * 60_000).toISOString() : undefined;
   const endAt = lastCandle?.timestamp ? new Date(lastCandle.timestamp + 60_000).toISOString() : undefined;
-  const fileHistory = snapshotsFile ? await loadMicrostructureHistoryFromJson(snapshotsFile) : [];
+  const fileHistory = snapshotsFiles.length > 0 ? await loadMicrostructureHistoryFromJsonFiles(snapshotsFiles) : [];
   const supabaseHistory = await fetchHistoricalMicrostructureSnapshots({
     symbol: "BTCUSDT",
     startAt,
@@ -213,7 +214,7 @@ async function main() {
     input,
     outputDir: stringArg(args, "output-dir", path.join("research", timestampedFile("cycle", "dir").replace(/\.dir$/, ""))),
     userId: stringArg(args, "user-id", process.env.BOT_USER_ID) ?? null,
-    snapshotsFile: stringArg(args, "snapshots-file"),
+    snapshotsFiles: csvStringArg(args, "snapshots-file"),
     microstructureLookbackMinutes: numberArg(args, "micro-lookback-minutes", 15),
     limit: numberArg(args, "limit", 72),
     trainingCandles: numberArg(args, "training-candles", 8_000),
