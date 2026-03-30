@@ -22,13 +22,19 @@ async function trainSide(input: string, side: "long" | "short", output: string) 
   const lastCandle = candles.length > 0 ? candles[candles.length - 1] : undefined;
   const startAt = firstCandle?.timestamp ? new Date(firstCandle.timestamp - 30 * 60_000).toISOString() : undefined;
   const endAt = lastCandle?.timestamp ? new Date(lastCandle.timestamp + 60_000).toISOString() : undefined;
+  const historyLookbackCandles = numberArg(args, "history-lookback-candles", 900);
+  const maxTrainExamplesPerSegment = numberArg(args, "max-train-examples-per-segment", 400);
   const fileHistory = snapshotsFiles.length > 0 ? await loadMicrostructureHistoryFromJsonFiles(snapshotsFiles) : [];
   const supabaseHistory = await fetchHistoricalMicrostructureSnapshots({
     symbol: "BTCUSDT",
     startAt,
     endAt,
   }).catch(() => []);
-  const microstructureHistory = [...fileHistory, ...supabaseHistory];
+  const minTimestamp = firstCandle?.timestamp ? firstCandle.timestamp - 30 * 60_000 : Number.NEGATIVE_INFINITY;
+  const maxTimestamp = lastCandle?.timestamp ? lastCandle.timestamp + 60_000 : Number.POSITIVE_INFINITY;
+  const microstructureHistory = [...fileHistory, ...supabaseHistory].filter(
+    (snapshot) => snapshot.timestamp >= minTimestamp && snapshot.timestamp <= maxTimestamp,
+  );
   const model = trainLogisticModel(candles, settings, {
     side,
     horizonBars: numberArg(args, "horizon-bars", 15),
@@ -40,6 +46,8 @@ async function trainSide(input: string, side: "long" | "short", output: string) 
     regularization: numberArg(args, "regularization", 0.0005),
     microstructureHistory,
     microstructureLookbackMs: numberArg(args, "micro-lookback-minutes", 15) * 60_000,
+    historyLookbackCandles,
+    maxTrainExamplesPerSegment,
   });
 
   await writeJson(output, {
@@ -62,6 +70,8 @@ async function trainSide(input: string, side: "long" | "short", output: string) 
       epochs: model.epochs,
       learningRate: model.learningRate,
       regularization: model.regularization,
+      historyLookbackCandles,
+      maxTrainExamplesPerSegment,
       microstructureSnapshots: microstructureHistory.length,
       dataQuality: dataset.quality,
     },

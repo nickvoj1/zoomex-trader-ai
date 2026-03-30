@@ -111,6 +111,7 @@ export interface FeatureExtractionOptions {
   microstructureHistory?: HistoricalMicrostructureSnapshot[] | null;
   liveMicrostructure?: MarketMicrostructure | null;
   microstructureLookbackMs?: number;
+  historyLookbackCandles?: number;
 }
 
 export interface BinaryClassificationMetrics {
@@ -144,6 +145,9 @@ export interface DatasetProfile {
   trainExamples: number;
   validationExamples: number;
   testExamples: number;
+  rawTrainExamples: number;
+  balancedTrainExamples: number;
+  balancedSegmentCount: number;
   positiveRate: number;
   coverageDays: number;
   avgFutureReturnPct: number;
@@ -205,9 +209,13 @@ export interface TrainLogisticOptions {
   regularization?: number;
   microstructureHistory?: HistoricalMicrostructureSnapshot[];
   microstructureLookbackMs?: number;
+  historyLookbackCandles?: number;
+  maxTrainExamplesPerSegment?: number;
 }
 
 const DEFAULT_OBJECTIVE: SweepObjective = "composite";
+const DEFAULT_HISTORY_LOOKBACK_CANDLES = 900;
+const DEFAULT_MAX_TRAIN_EXAMPLES_PER_SEGMENT = 400;
 
 function round(value: number, precision = 4) {
   return Number(value.toFixed(precision));
@@ -684,13 +692,17 @@ export function extractFeatureMap(
   options: FeatureExtractionOptions = {},
 ) {
   const timestamp = candles[index]?.timestamp;
+  const historyLookbackCandles = options.historyLookbackCandles ?? DEFAULT_HISTORY_LOOKBACK_CANDLES;
+  const stateCandles = historyLookbackCandles > 0
+    ? candles.slice(Math.max(0, index + 1 - historyLookbackCandles), index + 1)
+    : candles.slice(0, index + 1);
   const microContext = resolveHistoricalMicrostructureContext(
     options.microstructureHistory ?? [],
     timestamp,
     options.liveMicrostructure ?? null,
     options.microstructureLookbackMs ?? 15 * 60 * 1000,
   );
-  const state = buildMarketState(candles.slice(0, index + 1), null, null, microContext.current);
+  const state = buildMarketState(stateCandles, null, null, microContext.current);
   const decision = deriveAdvancedDecision(state, settings, {
     startingBalance: 10_000,
     currentBalance: 10_000,
@@ -897,7 +909,64 @@ function splitExamples(examples: TrainingExample[]) {
   };
 }
 
-function summarizeDataset(examples: TrainingExample[], side: "long" | "short", splits: ReturnType<typeof splitExamples>): DatasetProfile {
+function sampleEvenly<T>(items: T[], targetCount: number) {
+  if (targetCount <= 0 || items.length === 0) return [] as T[];
+  if (items.length <= targetCount) return [...items];
+  if (targetCount === 1) return [items[Math.floor(items.length / 2)]];
+
+  const sampled: T[] = [];
+  const lastIndex = items.length - 1;
+  const step = lastIndex / (targetCount - 1);
+  const used = new Set<number>();
+
+  for (let index = 0; index < targetCount; index += 1) {
+    const candidate = Math.min(lastIndex, Math.round(index * step));
+    let chosen = candidate;
+    while (used.has(chosen) && chosen < lastIndex) chosen += 1;
+    while (used.has(chosen) && chosen > 0) chosen -= 1;
+    if (used.has(chosen)) continue;
+    used.add(chosen);
+    sampled.push(items[chosen]);
+  }
+
+  return sampled;
+}
+
+export function rebalanceTrainingExamplesBySegment(
+  examples: TrainingExample[],
+  maxExamplesPerSegment = DEFAULT_MAX_TRAIN_EXAMPLES_PER_SEGMENT,
+) {
+  if (maxExamplesPerSegment <= 0) {
+    return {
+      examples: [...examples],
+      balancedSegmentCount: new Set(examples.map((example) => example.regimeSegment)).size,
+    };
+  }
+
+  const groups = new Map<string, TrainingExample[]>();
+  for (const example of examples) {
+    const existing = groups.get(example.regimeSegment) ?? [];
+    existing.push(example);
+    groups.set(example.regimeSegment, existing);
+  }
+
+  const balanced = [...groups.values()]
+    .flatMap((group) => sampleEvenly(group, maxExamplesPerSegment))
+    .sort((left, right) => (left.timestamp ?? 0) - (right.timestamp ?? 0));
+
+  return {
+    examples: balanced,
+    balancedSegmentCount: groups.size,
+  };
+}
+
+function summarizeDataset(
+  examples: TrainingExample[],
+  side: "long" | "short",
+  splits: ReturnType<typeof splitExamples>,
+  balancedTrainExamples: number,
+  balancedSegmentCount: number,
+): DatasetProfile {
   const labels = labelsForSide(examples, side);
   const timestamps = examples
     .map((example) => example.timestamp)
@@ -911,6 +980,9 @@ function summarizeDataset(examples: TrainingExample[], side: "long" | "short", s
     trainExamples: splits.train.length,
     validationExamples: splits.validation.length,
     testExamples: splits.test.length,
+    rawTrainExamples: splits.train.length,
+    balancedTrainExamples,
+    balancedSegmentCount,
     positiveRate: round(average(labels), 6),
     coverageDays,
     avgFutureReturnPct: round(average(examples.map((example) => example.futureReturnPct)), 6),
@@ -1125,14 +1197,32 @@ function evaluateLogistic(
 }
 
 function optimalThreshold(rows: number[][], labels: number[], weights: number[], bias: number) {
-  let bestThreshold = 0.5;
+  let bestThreshold = 0.6;
   let bestScore = -Infinity;
+  let bestPrecision = -Infinity;
+  const labelRate = average(labels);
+  const minPositiveRate = Math.max(0.02, Math.min(0.18, labelRate * 0.3));
+  const maxPositiveRate = Math.min(0.45, Math.max(minPositiveRate + 0.02, labelRate * 1.2 + 0.03));
 
-  for (let threshold = 0.35; threshold <= 0.75; threshold += 0.02) {
+  for (let threshold = 0.4; threshold <= 0.92; threshold += 0.01) {
     const metrics = evaluateLogistic(rows, labels, weights, bias, threshold);
-    const score = metrics.f1 * 2 + metrics.precision + metrics.recall - metrics.loss;
-    if (score > bestScore) {
+    const ratePenalty = metrics.positiveRate < minPositiveRate
+      ? (minPositiveRate - metrics.positiveRate) * 1.5
+      : metrics.positiveRate > maxPositiveRate
+        ? (metrics.positiveRate - maxPositiveRate) * 2.5
+        : 0;
+    const precisionShortfallPenalty = Math.max(0, 0.5 - metrics.precision) * 3.2;
+    const score =
+      metrics.precision * 4.5 +
+      metrics.f1 * 1.6 +
+      metrics.recall * 0.3 -
+      metrics.loss -
+      ratePenalty -
+      precisionShortfallPenalty;
+
+    if (score > bestScore || (score === bestScore && metrics.precision > bestPrecision)) {
       bestScore = score;
+      bestPrecision = metrics.precision;
       bestThreshold = round(threshold, 4);
     }
   }
@@ -1152,12 +1242,17 @@ export function trainLogisticModel(
   const moveThresholdPct = options.moveThresholdPct ?? 0.18;
   const feeBps = options.feeBps ?? settings.feeBps;
   const slippageBps = options.slippageBps ?? settings.slippageBps;
+  const historyLookbackCandles = options.historyLookbackCandles ?? DEFAULT_HISTORY_LOOKBACK_CANDLES;
+  const maxTrainExamplesPerSegment = options.maxTrainExamplesPerSegment ?? DEFAULT_MAX_TRAIN_EXAMPLES_PER_SEGMENT;
   const examples = buildTrainingExamples(candles, settings, horizonBars, moveThresholdPct, feeBps, slippageBps, {
     microstructureHistory: options.microstructureHistory,
     microstructureLookbackMs: options.microstructureLookbackMs,
+    historyLookbackCandles,
   });
   const splits = splitExamples(examples);
-  const { train, validation, test } = splits;
+  const { validation, test } = splits;
+  const balancedTraining = rebalanceTrainingExamplesBySegment(splits.train, maxTrainExamplesPerSegment);
+  const train = balancedTraining.examples;
   const trainRows = train.map((example) => example.features);
   const validationRows = validation.map((example) => example.features);
   const testRows = test.map((example) => example.features);
@@ -1196,7 +1291,13 @@ export function trainLogisticModel(
     validation: evaluateLogistic(normalizedValidation, validationLabels, weights, bias, threshold),
     test: evaluateLogistic(normalizedTest, testLabels, weights, bias, threshold),
   } satisfies DatasetSplitMetrics;
-  const dataset = summarizeDataset(examples, options.side, splits);
+  const dataset = summarizeDataset(
+    examples,
+    options.side,
+    splits,
+    balancedTraining.examples.length,
+    balancedTraining.balancedSegmentCount,
+  );
   const regimeMetrics = {
     validation: evaluateSegments(validation, normalizedValidation, validationLabels, weights, bias, threshold, options.side),
     test: evaluateSegments(test, normalizedTest, testLabels, weights, bias, threshold, options.side),
