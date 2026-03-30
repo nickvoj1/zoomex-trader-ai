@@ -598,7 +598,7 @@ async function loadOpsEntryGuard(
   if (disabledUntil && Number.isFinite(disabledUntil) && disabledUntil > Date.now()) {
     return {
       allowsLiveEntries: false,
-      reason: control?.notes ?? `live entries paused until ${control.disable_live_entries_until}`,
+      reason: control?.notes ?? `live entries paused until ${control?.disable_live_entries_until}`,
       heartbeatAgeSeconds: null,
     };
   }
