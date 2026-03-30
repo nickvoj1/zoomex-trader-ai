@@ -34,6 +34,7 @@ async function main() {
   const directInput = stringArg(args, "input");
   const klinesDir = stringArg(args, "klines-dir", path.join("research", "binance-vision", "klines", "BTCUSDT"))!;
   const aggTradesDir = stringArg(args, "aggtrades-dir", path.join("research", "binance-vision", "aggTrades", "BTCUSDT"))!;
+  const historicalSnapshotsFile = stringArg(args, "historical-snapshots-file", path.join("research", "datasets", "BTCUSDT-historical-microstructure.json"))!;
   const preparedOutput = stringArg(args, "prepared-output", path.join("research", "datasets", "BTCUSDT-1m-unified.csv"))!;
   const preparedReport = stringArg(args, "prepared-report", preparedOutput.replace(/\.csv$/i, "-quality.json"))!;
   const snapshotsJsonl = stringArg(args, "snapshots-jsonl");
@@ -90,10 +91,11 @@ async function main() {
         const prepared = await buildUnifiedTrainingDataset({
           klinesDir,
           aggTradesDir,
+          historicalSnapshotsFile,
           output: preparedOutput,
           reportPath: preparedReport,
           snapshotsJsonl: snapshotsJsonl ?? undefined,
-          snapshotsOutput: snapshotsJsonl || aggTradesDir ? snapshotsOutput : undefined,
+          snapshotsOutput: snapshotsJsonl || aggTradesDir || historicalSnapshotsFile ? snapshotsOutput : undefined,
         });
         input = prepared.output;
         snapshotsFile = prepared.snapshotsOutput ?? snapshotsFile;

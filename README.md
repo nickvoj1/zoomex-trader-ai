@@ -89,6 +89,15 @@ Backfill historical futures candles from Binance:
 npm run research:backfill -- --symbol BTCUSDT --interval 1m --start 2025-01-01 --end 2025-03-01
 ```
 
+Backfill historical Binance-derived microstructure context:
+
+```bash
+npm run research:vision -- --dataset premiumIndexKlines --symbol BTCUSDT --interval 5m --start-month 2024-01 --end-month 2026-02
+npm run research:backfill-micro -- --symbol BTCUSDT --start 2024-01-01 --end 2026-03-29 --period 5m --premium-archives-dir research/binance-vision/premiumIndexKlines/BTCUSDT/5m --output research/datasets/BTCUSDT-historical-microstructure.json
+```
+
+The historical microstructure backfill uses deep premium-index archives when present and blends in the shorter-retention Binance futures derived metrics endpoints for recent open interest, long/short ratios, and taker flow.
+
 Parameter sweep:
 
 ```bash
@@ -130,7 +139,7 @@ npm run research:prepare -- --klines-dir /absolute/path/to/binance-vision/klines
 If you also have Binance monthly `aggTrades` archives, the prep step can fold them into minute-level trade-flow snapshots for the training pipeline:
 
 ```bash
-npm run research:prepare -- --klines-dir /absolute/path/to/binance-vision/klines/BTCUSDT --aggtrades-dir /absolute/path/to/binance-vision/aggTrades/BTCUSDT --snapshots-jsonl /absolute/path/to/market-snapshots-BTCUSDT.jsonl
+npm run research:prepare -- --klines-dir /absolute/path/to/binance-vision/klines/BTCUSDT --aggtrades-dir /absolute/path/to/binance-vision/aggTrades/BTCUSDT --historical-snapshots-file /absolute/path/to/BTCUSDT-historical-microstructure.json --snapshots-jsonl /absolute/path/to/market-snapshots-BTCUSDT.jsonl
 ```
 
 Run scheduled retraining from collected data:
@@ -142,7 +151,7 @@ npm run research:schedule -- --input /absolute/path/to/btcusdt-1m.csv --every-mi
 Run scheduled retraining with automatic dataset preparation from the archive folder:
 
 ```bash
-npm run research:schedule -- --auto-prepare true --klines-dir /absolute/path/to/binance-vision/klines/BTCUSDT --aggtrades-dir /absolute/path/to/binance-vision/aggTrades/BTCUSDT --snapshots-jsonl /absolute/path/to/market-snapshots-BTCUSDT.jsonl --every-minutes 240
+npm run research:schedule -- --auto-prepare true --klines-dir /absolute/path/to/binance-vision/klines/BTCUSDT --aggtrades-dir /absolute/path/to/binance-vision/aggTrades/BTCUSDT --historical-snapshots-file /absolute/path/to/BTCUSDT-historical-microstructure.json --snapshots-jsonl /absolute/path/to/market-snapshots-BTCUSDT.jsonl --every-minutes 240
 ```
 
 Fetch cross-venue market snapshots:

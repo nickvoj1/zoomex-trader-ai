@@ -144,6 +144,26 @@ async function loadSnapshotsFromJsonl(jsonlPath: string) {
   return snapshots;
 }
 
+async function loadSnapshotsFromJsonFile(filePath: string) {
+  const { readFile } = await import("node:fs/promises");
+  try {
+    const text = await readFile(filePath, "utf8");
+    const parsed = JSON.parse(text) as unknown;
+    if (Array.isArray(parsed)) {
+      return parsed;
+    }
+    if (parsed && typeof parsed === "object" && Array.isArray((parsed as { snapshots?: unknown[] }).snapshots)) {
+      return (parsed as { snapshots: unknown[] }).snapshots;
+    }
+    return [];
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return [];
+    }
+    throw error;
+  }
+}
+
 function parseAggTradeHeader(header: string[]) {
   const normalized = header.map((value) => value.trim().toLowerCase());
   const indexOf = (aliases: string[]) => normalized.findIndex((value) => aliases.includes(value));
@@ -336,6 +356,7 @@ export async function buildUnifiedTrainingDataset(options: {
   output: string;
   reportPath?: string;
   snapshotsJsonl?: string;
+  historicalSnapshotsFile?: string;
   aggTradesDir?: string;
   snapshotsOutput?: string;
   intervalMs?: number;
@@ -396,6 +417,27 @@ export async function buildUnifiedTrainingDataset(options: {
     }
     if (jsonlSnapshots.length > 0) {
       snapshotSources.push("live-jsonl");
+    }
+  }
+  if (options.historicalSnapshotsFile) {
+    const historicalSnapshots = await loadSnapshotsFromJsonFile(options.historicalSnapshotsFile);
+    for (const snapshot of historicalSnapshots) {
+      if (!snapshot || typeof snapshot !== "object") continue;
+      const record = snapshot as Record<string, unknown>;
+      const timestamp = parseSnapshotTimestamp(record);
+      const microstructure = record.microstructure && typeof record.microstructure === "object"
+        ? record.microstructure as unknown as MarketMicrostructure
+        : null;
+      if (timestamp === null) continue;
+      mergedSnapshots.push({
+        timestamp,
+        source: typeof record.source === "string" ? record.source : "historical-json",
+        microstructure,
+        rawPayload: record,
+      });
+    }
+    if (historicalSnapshots.length > 0) {
+      snapshotSources.push("historical-json");
     }
   }
   if (options.aggTradesDir) {

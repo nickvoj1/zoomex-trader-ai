@@ -7,7 +7,7 @@ import { booleanArg, ensureParentDirectory, numberArg, parseArgs, stringArg } fr
 
 const BINANCE_VISION_BASE_URL = "https://data.binance.vision/data/futures/um/monthly";
 
-type DatasetKind = "klines" | "aggTrades";
+type DatasetKind = "klines" | "aggTrades" | "premiumIndexKlines" | "markPriceKlines" | "indexPriceKlines";
 
 function parseMonth(raw: string) {
   const match = raw.match(/^(\d{4})-(\d{2})$/);
@@ -51,6 +51,16 @@ function buildArchivePath(dataset: DatasetKind, symbol: string, month: string, i
     }
     return {
       remotePath: `klines/${symbol}/${interval}/${symbol}-${interval}-${month}.zip`,
+      localName: `${symbol}-${interval}-${month}.zip`,
+    };
+  }
+
+  if (dataset === "premiumIndexKlines" || dataset === "markPriceKlines" || dataset === "indexPriceKlines") {
+    if (!interval) {
+      throw new Error(`--interval is required for dataset=${dataset}`);
+    }
+    return {
+      remotePath: `${dataset}/${symbol}/${interval}/${symbol}-${interval}-${month}.zip`,
       localName: `${symbol}-${interval}-${month}.zip`,
     };
   }
@@ -99,12 +109,12 @@ async function renamePart(partPath: string, destination: string) {
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const dataset = stringArg(args, "dataset", "klines") as DatasetKind;
-  if (!["klines", "aggTrades"].includes(dataset)) {
-    throw new Error("--dataset must be klines or aggTrades");
+  if (!["klines", "aggTrades", "premiumIndexKlines", "markPriceKlines", "indexPriceKlines"].includes(dataset)) {
+    throw new Error("--dataset must be klines, aggTrades, premiumIndexKlines, markPriceKlines, or indexPriceKlines");
   }
 
   const symbol = stringArg(args, "symbol", "BTCUSDT")!;
-  const interval = dataset === "klines" ? stringArg(args, "interval", "1m")! : undefined;
+  const interval = dataset === "aggTrades" ? undefined : stringArg(args, "interval", dataset === "klines" ? "1m" : "5m")!;
   const defaultEnd = new Date();
   defaultEnd.setUTCMonth(defaultEnd.getUTCMonth() - 1);
   const defaultEndMonth = formatMonth(defaultEnd.getUTCFullYear(), defaultEnd.getUTCMonth() + 1);
