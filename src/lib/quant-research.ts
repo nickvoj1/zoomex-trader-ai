@@ -217,6 +217,7 @@ export interface TrainLogisticOptions {
 const DEFAULT_OBJECTIVE: SweepObjective = "composite";
 const DEFAULT_HISTORY_LOOKBACK_CANDLES = 900;
 const DEFAULT_MAX_TRAIN_EXAMPLES_PER_SEGMENT = 400;
+const MIN_MODEL_PRECISION_FLOOR = 0.5;
 
 function round(value: number, precision = 4) {
   return Number(value.toFixed(precision));
@@ -933,9 +934,14 @@ function sampleEvenly<T>(items: T[], targetCount: number) {
   return sampled;
 }
 
+function labelForExample(example: TrainingExample, side: "long" | "short") {
+  return side === "long" ? example.labelLong : example.labelShort;
+}
+
 export function rebalanceTrainingExamplesBySegment(
   examples: TrainingExample[],
   maxExamplesPerSegment = DEFAULT_MAX_TRAIN_EXAMPLES_PER_SEGMENT,
+  side?: "long" | "short",
 ) {
   if (maxExamplesPerSegment <= 0) {
     return {
@@ -952,7 +958,41 @@ export function rebalanceTrainingExamplesBySegment(
   }
 
   const balanced = [...groups.values()]
-    .flatMap((group) => sampleEvenly(group, maxExamplesPerSegment))
+    .flatMap((group) => {
+      if (!side) return sampleEvenly(group, maxExamplesPerSegment);
+
+      const positives = group.filter((example) => labelForExample(example, side) === 1);
+      const negatives = group.filter((example) => labelForExample(example, side) === 0);
+      if (positives.length === 0 || negatives.length === 0) {
+        return sampleEvenly(group, maxExamplesPerSegment);
+      }
+
+      const positiveTarget = Math.min(
+        positives.length,
+        Math.max(1, Math.ceil(maxExamplesPerSegment * 0.45)),
+      );
+      const negativeTarget = Math.min(
+        negatives.length,
+        Math.max(1, maxExamplesPerSegment - positiveTarget),
+      );
+      const sampledPositives = sampleEvenly(positives, positiveTarget);
+      const sampledNegatives = sampleEvenly(negatives, negativeTarget);
+      const remaining = Math.max(0, maxExamplesPerSegment - sampledPositives.length - sampledNegatives.length);
+      if (remaining === 0) {
+        return [...sampledPositives, ...sampledNegatives];
+      }
+
+      const leftovers = [
+        ...positives.filter((example) => !sampledPositives.includes(example)),
+        ...negatives.filter((example) => !sampledNegatives.includes(example)),
+      ];
+
+      return [
+        ...sampledPositives,
+        ...sampledNegatives,
+        ...sampleEvenly(leftovers, remaining),
+      ];
+    })
     .sort((left, right) => (left.timestamp ?? 0) - (right.timestamp ?? 0));
 
   return {
@@ -1197,29 +1237,62 @@ function evaluateLogistic(
   };
 }
 
+function balancedClassWeights(labels: number[]) {
+  const positives = labels.reduce((sum, label) => sum + (label === 1 ? 1 : 0), 0);
+  const negatives = labels.length - positives;
+  if (positives === 0 || negatives === 0) {
+    return { positive: 1, negative: 1 };
+  }
+
+  const total = labels.length;
+  return {
+    positive: clamp(total / (2 * positives), 0.75, 4),
+    negative: clamp(total / (2 * negatives), 0.75, 4),
+  };
+}
+
 function optimalThreshold(rows: number[][], labels: number[], weights: number[], bias: number) {
   let bestThreshold = 0.6;
   let bestScore = -Infinity;
   let bestPrecision = -Infinity;
+  let bestQualifiedThreshold: number | null = null;
+  let bestQualifiedScore = -Infinity;
   const labelRate = average(labels);
-  const minPositiveRate = Math.max(0.02, Math.min(0.18, labelRate * 0.3));
-  const maxPositiveRate = Math.min(0.45, Math.max(minPositiveRate + 0.02, labelRate * 1.2 + 0.03));
+  const minPositiveRate = Math.max(0.025, Math.min(0.22, labelRate * 0.45));
+  const maxPositiveRate = Math.min(0.5, Math.max(minPositiveRate + 0.04, labelRate * 1.5 + 0.04));
+  const minUsefulRecall = Math.min(0.35, Math.max(0.06, labelRate * 0.35));
 
-  for (let threshold = 0.4; threshold <= 0.92; threshold += 0.01) {
+  for (let threshold = 0.32; threshold <= 0.92; threshold += 0.01) {
     const metrics = evaluateLogistic(rows, labels, weights, bias, threshold);
     const ratePenalty = metrics.positiveRate < minPositiveRate
-      ? (minPositiveRate - metrics.positiveRate) * 1.5
+      ? (minPositiveRate - metrics.positiveRate) * 1.8
       : metrics.positiveRate > maxPositiveRate
-        ? (metrics.positiveRate - maxPositiveRate) * 2.5
+        ? (metrics.positiveRate - maxPositiveRate) * 2.2
         : 0;
-    const precisionShortfallPenalty = Math.max(0, 0.5 - metrics.precision) * 3.2;
+    const precisionShortfallPenalty = Math.max(0, MIN_MODEL_PRECISION_FLOOR - metrics.precision) * 4.2;
+    const recallShortfallPenalty = Math.max(0, minUsefulRecall - metrics.recall) * 1.6;
     const score =
-      metrics.precision * 4.5 +
-      metrics.f1 * 1.6 +
-      metrics.recall * 0.3 -
+      metrics.precision * 2.8 +
+      metrics.f1 * 3.8 +
+      metrics.recall * 1.4 -
       metrics.loss -
       ratePenalty -
-      precisionShortfallPenalty;
+      precisionShortfallPenalty -
+      recallShortfallPenalty;
+
+    if (metrics.precision >= MIN_MODEL_PRECISION_FLOOR) {
+      const qualifiedScore =
+        metrics.f1 * 4 +
+        metrics.recall * 2 +
+        metrics.precision * 1.8 -
+        metrics.loss -
+        ratePenalty -
+        recallShortfallPenalty;
+      if (qualifiedScore > bestQualifiedScore) {
+        bestQualifiedScore = qualifiedScore;
+        bestQualifiedThreshold = round(threshold, 4);
+      }
+    }
 
     if (score > bestScore || (score === bestScore && metrics.precision > bestPrecision)) {
       bestScore = score;
@@ -1228,7 +1301,7 @@ function optimalThreshold(rows: number[][], labels: number[], weights: number[],
     }
   }
 
-  return bestThreshold;
+  return bestQualifiedThreshold ?? bestThreshold;
 }
 
 export function trainLogisticModel(
@@ -1256,7 +1329,7 @@ export function trainLogisticModel(
     : rawExamples;
   const splits = splitExamples(examples);
   const { validation, test } = splits;
-  const balancedTraining = rebalanceTrainingExamplesBySegment(splits.train, maxTrainExamplesPerSegment);
+  const balancedTraining = rebalanceTrainingExamplesBySegment(splits.train, maxTrainExamplesPerSegment, options.side);
   const train = balancedTraining.examples;
   const trainRows = train.map((example) => example.features);
   const validationRows = validation.map((example) => example.features);
@@ -1269,21 +1342,26 @@ export function trainLogisticModel(
   const normalizedTest = applyNormalization(testRows, means, stdDevs);
   const weights = Array.from({ length: TRAINING_FEATURE_NAMES.length }, () => 0);
   let bias = 0;
+  const classWeights = balancedClassWeights(trainLabels);
 
   for (let epoch = 0; epoch < epochs; epoch += 1) {
     const gradients = Array.from({ length: weights.length }, () => 0);
     let biasGradient = 0;
+    let totalSampleWeight = 0;
 
     normalizedTrain.forEach((row, rowIndex) => {
       const prediction = sigmoid(dotProduct(row, weights) + bias);
-      const error = prediction - trainLabels[rowIndex];
+      const label = trainLabels[rowIndex];
+      const sampleWeight = label === 1 ? classWeights.positive : classWeights.negative;
+      const error = (prediction - label) * sampleWeight;
       row.forEach((value, featureIndex) => {
         gradients[featureIndex] += error * value;
       });
       biasGradient += error;
+      totalSampleWeight += sampleWeight;
     });
 
-    const scale = normalizedTrain.length || 1;
+    const scale = totalSampleWeight || normalizedTrain.length || 1;
     weights.forEach((_, featureIndex) => {
       weights[featureIndex] -= learningRate * ((gradients[featureIndex] / scale) + regularization * weights[featureIndex]);
     });
