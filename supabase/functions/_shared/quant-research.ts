@@ -211,6 +211,7 @@ export interface TrainLogisticOptions {
   microstructureLookbackMs?: number;
   historyLookbackCandles?: number;
   maxTrainExamplesPerSegment?: number;
+  candidateOnly?: boolean;
 }
 
 const DEFAULT_OBJECTIVE: SweepObjective = "composite";
@@ -1244,11 +1245,15 @@ export function trainLogisticModel(
   const slippageBps = options.slippageBps ?? settings.slippageBps;
   const historyLookbackCandles = options.historyLookbackCandles ?? DEFAULT_HISTORY_LOOKBACK_CANDLES;
   const maxTrainExamplesPerSegment = options.maxTrainExamplesPerSegment ?? DEFAULT_MAX_TRAIN_EXAMPLES_PER_SEGMENT;
-  const examples = buildTrainingExamples(candles, settings, horizonBars, moveThresholdPct, feeBps, slippageBps, {
+  const candidateOnly = options.candidateOnly ?? true;
+  const rawExamples = buildTrainingExamples(candles, settings, horizonBars, moveThresholdPct, feeBps, slippageBps, {
     microstructureHistory: options.microstructureHistory,
     microstructureLookbackMs: options.microstructureLookbackMs,
     historyLookbackCandles,
   });
+  const examples = candidateOnly
+    ? rawExamples.filter((example) => example.decision.action === options.side)
+    : rawExamples;
   const splits = splitExamples(examples);
   const { validation, test } = splits;
   const balancedTraining = rebalanceTrainingExamplesBySegment(splits.train, maxTrainExamplesPerSegment);

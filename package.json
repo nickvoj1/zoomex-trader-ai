@@ -25,6 +25,7 @@
     "research:sweep": "tsx scripts/quant/parameter-sweep.ts",
     "research:walk-forward": "tsx scripts/quant/walk-forward.ts",
     "research:train": "tsx scripts/quant/train-signal-model.ts",
+    "research:train:highmem": "NODE_OPTIONS='--max-old-space-size=8192' tsx scripts/quant/train-signal-model.ts",
     "ops:archive": "tsx scripts/quant/archive-market-microstructure.ts",
     "ops:daemon": "tsx scripts/quant/execution-daemon.ts",
     "ops:monitor": "tsx scripts/quant/ops-monitor.ts",

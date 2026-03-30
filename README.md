@@ -118,6 +118,26 @@ npm run research:train -- --input /absolute/path/to/btcusdt-1m.csv --side both
 
 The trained artifacts now include dataset diagnostics, regime-segment validation metrics, and an approval decision that the live bot uses before loading them.
 
+The current training flow is aligned to live usage:
+
+- it trains on real rule-qualified long/short candidates, not every candle
+- it caps candle-history lookback for each example so wider training windows are tractable
+- it balances the training split by regime segment while leaving validation and test untouched
+
+For larger free-data retrains on machines with more RAM, use the high-memory helper:
+
+```bash
+npm run research:train:highmem -- --input /absolute/path/to/btcusdt-1m.csv --side both
+```
+
+Useful training flags for the current model path:
+
+- `--history-lookback-candles 900`
+- `--max-train-examples-per-segment 400`
+- `--micro-lookback-minutes 1440`
+- `--horizon-bars 20`
+- `--move-threshold-pct 0.24`
+
 If you already have historical market snapshots in JSON, you can feed them into training too:
 
 ```bash
@@ -199,6 +219,17 @@ The training scripts now also pull historical `market_snapshots` from Supabase a
 For live auto-trading, approved offline models are no longer enough on their own. The live path now also requires a recent forward-validation report to pass its gate; otherwise the strategy falls back to rule-based analysis and suppresses auto-entry until more evidence has been collected.
 
 The live path also checks the ops control plane before allowing new live entries. A stale daemon heartbeat, a temporary ops pause, or a kill switch in `ops_controls` will block new live entries while still allowing close logic.
+
+## Live Readiness
+
+Do not treat the model as ready for full live scalping until both directions pass their approval gates:
+
+- approved `long` model
+- approved `short` model
+- recent forward-validation report allows live entries
+- ops heartbeat is healthy
+
+If only one side is approved, keep the other side on rule-engine fallback instead of letting a weak model influence live entries.
 
 ## Always-On Server
 
