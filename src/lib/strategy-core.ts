@@ -75,6 +75,10 @@ export interface MarketMicrostructure {
   liquidationIntensity: number | null;
   crossVenueBasisBps: number | null;
   crowdingScore: number | null;
+  markPriceUsd?: number | null;
+  indexPriceUsd?: number | null;
+  premiumIndexBps?: number | null;
+  markIndexBasisBps?: number | null;
 }
 
 export interface MarketState {
@@ -479,7 +483,15 @@ export function buildMarketMicrostructure(input: Partial<MarketMicrostructure> =
   const secondaryBook = input.secondaryBook ?? null;
   const primaryMid = primaryBook?.midPrice ?? null;
   const secondaryMid = secondaryBook?.midPrice ?? null;
-  const crossVenueBasisBps = input.crossVenueBasisBps ?? (
+  const markPriceUsd = input.markPriceUsd ?? null;
+  const indexPriceUsd = input.indexPriceUsd ?? null;
+  const premiumIndexBps = input.premiumIndexBps ?? null;
+  const markIndexBasisBps = input.markIndexBasisBps ?? (
+    markPriceUsd !== null && indexPriceUsd !== null && indexPriceUsd !== 0
+      ? round(safeDivide(markPriceUsd - indexPriceUsd, indexPriceUsd) * 10_000, 4)
+      : null
+  );
+  const crossVenueBasisBps = input.crossVenueBasisBps ?? markIndexBasisBps ?? (
     primaryMid && secondaryMid
       ? round(safeDivide(primaryMid - secondaryMid, secondaryMid) * 10_000, 4)
       : null
@@ -506,7 +518,11 @@ export function buildMarketMicrostructure(input: Partial<MarketMicrostructure> =
     input.liquidationBias === undefined &&
     input.liquidationIntensity === undefined &&
     input.crossVenueBasisBps === undefined &&
-    input.crowdingScore === undefined
+    input.crowdingScore === undefined &&
+    input.markPriceUsd === undefined &&
+    input.indexPriceUsd === undefined &&
+    input.premiumIndexBps === undefined &&
+    input.markIndexBasisBps === undefined
   ) {
     return null;
   }
@@ -523,6 +539,10 @@ export function buildMarketMicrostructure(input: Partial<MarketMicrostructure> =
     liquidationIntensity: input.liquidationIntensity ?? null,
     crossVenueBasisBps,
     crowdingScore,
+    markPriceUsd,
+    indexPriceUsd,
+    premiumIndexBps,
+    markIndexBasisBps,
   };
 }
 

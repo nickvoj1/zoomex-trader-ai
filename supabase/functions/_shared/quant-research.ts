@@ -497,6 +497,8 @@ function extractMicrostructureFeatures(context: HistoricalMicrostructureContext)
   const currentSecondaryImbalance = current?.secondaryBook?.imbalance ?? 0;
   const currentSpread = current?.primaryBook?.spreadBps ?? 0;
   const currentBasis = current?.crossVenueBasisBps ?? 0;
+  const currentMarkIndexBasis = current?.markIndexBasisBps ?? currentBasis;
+  const currentPremiumIndex = current?.premiumIndexBps ?? currentMarkIndexBasis;
   const currentCrowding = current?.crowdingScore ?? 0;
   const currentPressure = averageDefined([
     currentPrimaryImbalance,
@@ -516,6 +518,8 @@ function extractMicrostructureFeatures(context: HistoricalMicrostructureContext)
   const lastPressure = recentPressure[recentPressure.length - 1] ?? currentPressure;
   const spreadSeries = recent.map((entry) => entry.microstructure?.primaryBook?.spreadBps ?? 0);
   const basisSeries = recent.map((entry) => entry.microstructure?.crossVenueBasisBps ?? 0);
+  const markIndexBasisSeries = recent.map((entry) => entry.microstructure?.markIndexBasisBps ?? entry.microstructure?.crossVenueBasisBps ?? 0);
+  const premiumSeries = recent.map((entry) => entry.microstructure?.premiumIndexBps ?? entry.microstructure?.markIndexBasisBps ?? entry.microstructure?.crossVenueBasisBps ?? 0);
   const crowdingSeries = recent.map((entry) => entry.microstructure?.crowdingScore ?? 0);
 
   return {
@@ -533,9 +537,13 @@ function extractMicrostructureFeatures(context: HistoricalMicrostructureContext)
     micro_open_interest_change_pct: current?.openInterestChangePct ?? 0,
     micro_long_short_ratio: current?.longShortRatio ?? 1,
     micro_taker_imbalance: current?.takerImbalance ?? 0,
+    micro_mark_price_log10: safeLog10(current?.markPriceUsd),
+    micro_index_price_log10: safeLog10(current?.indexPriceUsd),
     micro_liquidation_bias: current?.liquidationBias ?? 0,
     micro_liquidation_intensity: current?.liquidationIntensity ?? 0,
     micro_cross_venue_basis_bps: currentBasis,
+    micro_mark_index_basis_bps: currentMarkIndexBasis,
+    micro_premium_index_bps: currentPremiumIndex,
     micro_crowding_score: currentCrowding,
     micro_primary_imbalance_mean: averageDefined(recent.map((entry) => entry.microstructure?.primaryBook?.imbalance)),
     micro_taker_imbalance_mean: averageDefined(recent.map((entry) => entry.microstructure?.takerImbalance)),
@@ -543,13 +551,18 @@ function extractMicrostructureFeatures(context: HistoricalMicrostructureContext)
     micro_liquidation_intensity_mean: averageDefined(recent.map((entry) => entry.microstructure?.liquidationIntensity)),
     micro_spread_bps_mean: averageDefined(recent.map((entry) => entry.microstructure?.primaryBook?.spreadBps)),
     micro_basis_bps_mean: averageDefined(recent.map((entry) => entry.microstructure?.crossVenueBasisBps)),
+    micro_mark_index_basis_mean: averageDefined(recent.map((entry) => entry.microstructure?.markIndexBasisBps ?? entry.microstructure?.crossVenueBasisBps)),
+    micro_premium_index_mean: averageDefined(recent.map((entry) => entry.microstructure?.premiumIndexBps ?? entry.microstructure?.markIndexBasisBps ?? entry.microstructure?.crossVenueBasisBps)),
     micro_open_interest_change_mean: averageDefined(recent.map((entry) => entry.microstructure?.openInterestChangePct)),
     micro_crowding_mean: averageDefined(recent.map((entry) => entry.microstructure?.crowdingScore)),
     micro_pressure_alignment: currentPressure,
     micro_pressure_trend: lastPressure - firstPressure,
+    micro_basis_structure_gap: currentPremiumIndex - currentMarkIndexBasis,
     micro_crowding_change: (crowdingSeries[crowdingSeries.length - 1] ?? currentCrowding) - (crowdingSeries[0] ?? currentCrowding),
     micro_spread_change_bps: (spreadSeries[spreadSeries.length - 1] ?? currentSpread) - (spreadSeries[0] ?? currentSpread),
     micro_basis_change_bps: (basisSeries[basisSeries.length - 1] ?? currentBasis) - (basisSeries[0] ?? currentBasis),
+    micro_mark_index_basis_change_bps: (markIndexBasisSeries[markIndexBasisSeries.length - 1] ?? currentMarkIndexBasis) - (markIndexBasisSeries[0] ?? currentMarkIndexBasis),
+    micro_premium_index_change_bps: (premiumSeries[premiumSeries.length - 1] ?? currentPremiumIndex) - (premiumSeries[0] ?? currentPremiumIndex),
   };
 }
 
@@ -632,9 +645,13 @@ export const TRAINING_FEATURE_NAMES = [
   "micro_open_interest_change_pct",
   "micro_long_short_ratio",
   "micro_taker_imbalance",
+  "micro_mark_price_log10",
+  "micro_index_price_log10",
   "micro_liquidation_bias",
   "micro_liquidation_intensity",
   "micro_cross_venue_basis_bps",
+  "micro_mark_index_basis_bps",
+  "micro_premium_index_bps",
   "micro_crowding_score",
   "micro_primary_imbalance_mean",
   "micro_taker_imbalance_mean",
@@ -642,10 +659,13 @@ export const TRAINING_FEATURE_NAMES = [
   "micro_liquidation_intensity_mean",
   "micro_spread_bps_mean",
   "micro_basis_bps_mean",
+  "micro_mark_index_basis_mean",
+  "micro_premium_index_mean",
   "micro_open_interest_change_mean",
   "micro_crowding_mean",
   "micro_pressure_alignment",
   "micro_pressure_trend",
+  "micro_basis_structure_gap",
   "micro_pressure_divergence",
   "micro_oi_crowding_interaction",
   "micro_basis_taker_alignment",
@@ -653,6 +673,8 @@ export const TRAINING_FEATURE_NAMES = [
   "micro_crowding_change",
   "micro_spread_change_bps",
   "micro_basis_change_bps",
+  "micro_mark_index_basis_change_bps",
+  "micro_premium_index_change_bps",
 ] as const;
 
 export function extractFeatureMap(

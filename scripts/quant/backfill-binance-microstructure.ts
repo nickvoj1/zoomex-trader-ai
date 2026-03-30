@@ -35,7 +35,7 @@ interface TakerRatioRow {
   sellVol?: string;
 }
 
-type PremiumIndexKlineRow = [
+type ArchiveKlineRow = [
   number,
   string,
   string,
@@ -89,11 +89,11 @@ async function fetchJson<T>(url: string) {
 }
 
 async function loadPremiumIndexRowsFromArchives(options: {
-  premiumArchivesDir: string;
+  archivesDir: string;
   startTime: number;
   endTime: number;
 }) {
-  const files = await readdir(options.premiumArchivesDir)
+  const files = await readdir(options.archivesDir)
     .then((entries) => entries.filter((file) => file.endsWith(".zip")).sort((left, right) => left.localeCompare(right)))
     .catch((error) => {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
@@ -102,12 +102,12 @@ async function loadPremiumIndexRowsFromArchives(options: {
       throw error;
     });
   if (files.length === 0) {
-    return [] as PremiumIndexKlineRow[];
+    return [] as ArchiveKlineRow[];
   }
 
-  const rows: PremiumIndexKlineRow[] = [];
+  const rows: ArchiveKlineRow[] = [];
   for (const file of files) {
-    const zipPath = path.join(options.premiumArchivesDir, file);
+    const zipPath = path.join(options.archivesDir, file);
     const { stdout } = await execFileAsync("unzip", ["-p", zipPath], {
       maxBuffer: 512 * 1024 * 1024,
     });
@@ -204,26 +204,28 @@ async function fetchLatestWindowRows<T>(options: {
   return Array.isArray(rows) ? rows : [];
 }
 
-async function fetchPaginatedPremiumIndexRows(options: {
+async function fetchPaginatedKlineRows(options: {
+  endpoint: string;
   symbol: string;
+  symbolParam?: "symbol" | "pair";
   interval: string;
   startTime: number;
   endTime: number;
   limit: number;
   sleepMs: number;
 }) {
-  const rows: PremiumIndexKlineRow[] = [];
+  const rows: ArchiveKlineRow[] = [];
   let cursor = options.startTime;
 
   while (cursor <= options.endTime) {
-    const url = new URL(`${BINANCE_FUTURES_BASE_URL}/fapi/v1/premiumIndexKlines`);
-    url.searchParams.set("symbol", options.symbol);
+    const url = new URL(`${BINANCE_FUTURES_BASE_URL}${options.endpoint}`);
+    url.searchParams.set(options.symbolParam ?? "symbol", options.symbol);
     url.searchParams.set("interval", options.interval);
     url.searchParams.set("limit", String(options.limit));
     url.searchParams.set("startTime", String(cursor));
     url.searchParams.set("endTime", String(options.endTime));
 
-    const page = await fetchJson<PremiumIndexKlineRow[]>(url.toString());
+    const page = await fetchJson<ArchiveKlineRow[]>(url.toString());
     if (!Array.isArray(page) || page.length === 0) {
       break;
     }
@@ -298,6 +300,8 @@ async function main() {
   const period = stringArg(args, "period", DEFAULT_PERIOD)!;
   const output = stringArg(args, "output", `research/datasets/${symbol}-historical-microstructure.json`)!;
   const premiumArchivesDir = stringArg(args, "premium-archives-dir", path.join("research", "binance-vision", "premiumIndexKlines", symbol, period));
+  const markArchivesDir = stringArg(args, "mark-archives-dir", path.join("research", "binance-vision", "markPriceKlines", symbol, period));
+  const indexArchivesDir = stringArg(args, "index-archives-dir", path.join("research", "binance-vision", "indexPriceKlines", symbol, period));
   const sleepMs = Math.max(0, numberArg(args, "sleep-ms", 120));
   const limit = Math.max(10, numberArg(args, "limit", 500));
   const writeFile = booleanArg(args, "write-file", true);
@@ -311,6 +315,8 @@ async function main() {
     topLongShortPositionRatios,
     takerRatios,
     premiumIndexKlines,
+    markPriceKlines,
+    indexPriceKlines,
   ] = await Promise.all([
     fetchPaginatedRows<FundingRateRow>({
       endpoint: "/fapi/v1/fundingRate",
@@ -352,13 +358,47 @@ async function main() {
       limit: Math.min(limit, 1000),
     }),
     loadPremiumIndexRowsFromArchives({
-      premiumArchivesDir: premiumArchivesDir!,
+      archivesDir: premiumArchivesDir!,
       startTime,
       endTime,
     }).then(async (rows) => rows.length > 0
       ? rows
-      : await fetchPaginatedPremiumIndexRows({
+      : await fetchPaginatedKlineRows({
+        endpoint: "/fapi/v1/premiumIndexKlines",
         symbol,
+        symbolParam: "symbol",
+        interval: period,
+        startTime,
+        endTime,
+        limit: 1000,
+        sleepMs,
+      })),
+    loadPremiumIndexRowsFromArchives({
+      archivesDir: markArchivesDir!,
+      startTime,
+      endTime,
+    }).then(async (rows) => rows.length > 0
+      ? rows
+      : await fetchPaginatedKlineRows({
+        endpoint: "/fapi/v1/markPriceKlines",
+        symbol,
+        symbolParam: "symbol",
+        interval: period,
+        startTime,
+        endTime,
+        limit: 1000,
+        sleepMs,
+      })),
+    loadPremiumIndexRowsFromArchives({
+      archivesDir: indexArchivesDir!,
+      startTime,
+      endTime,
+    }).then(async (rows) => rows.length > 0
+      ? rows
+      : await fetchPaginatedKlineRows({
+        endpoint: "/fapi/v1/indexPriceKlines",
+        symbol,
+        symbolParam: "pair",
         interval: period,
         startTime,
         endTime,
@@ -385,6 +425,8 @@ async function main() {
   const topPositionByTimestamp = indexByTimestamp(filteredTopLongShortPositionRatios, (row) => safeNumber(row.timestamp));
   const takerByTimestamp = indexByTimestamp(filteredTakerRatios, (row) => safeNumber(row.timestamp));
   const premiumByTimestamp = indexByTimestamp(premiumIndexKlines, (row) => safeNumber(row[0]));
+  const markByTimestamp = indexByTimestamp(markPriceKlines, (row) => safeNumber(row[0]));
+  const indexPriceByTimestamp = indexByTimestamp(indexPriceKlines, (row) => safeNumber(row[0]));
 
   const baseTimestamps = new Set<number>();
   [
@@ -394,6 +436,8 @@ async function main() {
     filteredTopLongShortPositionRatios,
     filteredTakerRatios,
     premiumIndexKlines,
+    markPriceKlines,
+    indexPriceKlines,
   ].forEach((rows) => {
     rows.forEach((row) => {
       const timestamp = Array.isArray(row)
@@ -415,6 +459,8 @@ async function main() {
     const topPositionRow = topPositionByTimestamp.get(timestamp) ?? null;
     const takerRow = takerByTimestamp.get(timestamp) ?? null;
     const premiumRow = premiumByTimestamp.get(timestamp) ?? null;
+    const markRow = markByTimestamp.get(timestamp) ?? null;
+    const indexRow = indexPriceByTimestamp.get(timestamp) ?? null;
     const fundingRow = latestFundingAtOrBefore(fundingRates, timestamp);
 
     const openInterestUsd = safeNumber(oiRow?.sumOpenInterestValue);
@@ -430,7 +476,13 @@ async function main() {
     const topAccountRatio = safeNumber(topAccountRow?.longShortRatio);
     const topPositionRatio = safeNumber(topPositionRow?.longShortRatio);
     const takerImbalance = ratioToImbalance(safeNumber(takerRow?.buySellRatio));
-    const basisBps = premiumRow ? round((safeNumber(premiumRow[4]) ?? 0) * 10_000, 6) : null;
+    const premiumIndexBps = premiumRow ? round((safeNumber(premiumRow[4]) ?? 0) * 10_000, 6) : null;
+    const markPriceUsd = safeNumber(markRow?.[4]) ?? safeNumber(fundingRow?.markPrice);
+    const indexPriceUsd = safeNumber(indexRow?.[4]);
+    const markIndexBasisBps = markPriceUsd !== null && indexPriceUsd !== null && indexPriceUsd !== 0
+      ? round(((markPriceUsd - indexPriceUsd) / indexPriceUsd) * 10_000, 6)
+      : premiumIndexBps;
+    const basisBps = markIndexBasisBps ?? premiumIndexBps;
     const crowdingScore = deriveCrowdingScore({
       fundingRatePct8h,
       openInterestChangePct,
@@ -454,6 +506,10 @@ async function main() {
         liquidationIntensity: null,
         crossVenueBasisBps: basisBps,
         crowdingScore,
+        markPriceUsd,
+        indexPriceUsd,
+        premiumIndexBps,
+        markIndexBasisBps,
       }),
       rawPayload: {
         fundingRate: fundingRow ?? null,
@@ -463,6 +519,8 @@ async function main() {
         topLongShortPositionRatio: topPositionRow ?? null,
         takerLongShortRatio: takerRow ?? null,
         premiumIndexKline: premiumRow ?? null,
+        markPriceKline: markRow ?? null,
+        indexPriceKline: indexRow ?? null,
       },
     };
   });
@@ -472,6 +530,8 @@ async function main() {
     symbol,
     period,
     premiumArchivesDir: premiumArchivesDir ?? null,
+    markArchivesDir: markArchivesDir ?? null,
+    indexArchivesDir: indexArchivesDir ?? null,
     startTime,
     endTime,
     recentDerivedWindow: {
@@ -504,6 +564,8 @@ async function main() {
       topLongShortPositionRatios: filteredTopLongShortPositionRatios.length,
       takerRatios: filteredTakerRatios.length,
       premiumIndexKlines: premiumIndexKlines.length,
+      markPriceKlines: markPriceKlines.length,
+      indexPriceKlines: indexPriceKlines.length,
       mergedSnapshots: snapshots.length,
     },
     snapshots,
