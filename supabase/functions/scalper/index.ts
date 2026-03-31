@@ -296,8 +296,12 @@ async function getSessionRiskState(supabaseAdmin: ReturnType<typeof createAdminC
     .filter((trade) => (trade.closed_at ?? trade.created_at) >= todayStart)
     .reduce((sum, trade) => sum + Number(trade.pnl ?? 0), 0);
 
+  // Only count consecutive losses within the current UTC day (session reset)
+  const todayTrades = (closedTrades ?? []).filter(
+    (trade) => (trade.closed_at ?? trade.created_at) >= todayStart,
+  );
   let consecutiveLosses = 0;
-  for (const trade of closedTrades ?? []) {
+  for (const trade of todayTrades) {
     if (Number(trade.pnl ?? 0) < 0) consecutiveLosses += 1;
     else break;
   }
