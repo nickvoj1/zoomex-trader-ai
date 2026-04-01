@@ -1279,7 +1279,7 @@ export function deriveAdvancedDecision(
     shortScore += shortMicro.score;
     shortReasons.push(...shortMicro.reasons);
 
-    if (shortScore >= 7) {
+    if (shortScore >= 5) {
       const stopPct = clamp(tf1.atrPct * 1.15, 0.0014, 0.0075);
       const takeProfitPct = stopPct * 1.9;
       const candidate = enrichEntryDecision(
