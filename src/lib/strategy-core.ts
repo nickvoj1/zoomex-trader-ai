@@ -1335,7 +1335,7 @@ export function deriveAdvancedDecision(
       longReasons.push("liquidation flow supports mean reversion higher");
     }
 
-    if (longScore >= 7) {
+    if (longScore >= 5) {
       const stopPct = clamp(tf1.atrPct * 0.95, 0.0012, 0.0055);
       const takeProfitPct = stopPct * 1.4;
       const candidate = enrichEntryDecision(
