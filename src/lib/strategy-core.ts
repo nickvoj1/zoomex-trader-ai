@@ -568,7 +568,8 @@ export function aggregateCandles(candles: MarketCandle[], intervalMinutes: numbe
   let current: MarketCandle | null = null;
 
   candles.forEach((candle, index) => {
-    const bucket = candle.timestamp !== undefined
+    const hasValidTimestamp = candle.timestamp !== undefined && candle.timestamp > 0;
+    const bucket = hasValidTimestamp
       ? Math.floor(candle.timestamp / (intervalMinutes * 60 * 1000))
       : Math.floor(index / intervalMinutes);
 
