@@ -1219,7 +1219,7 @@ export function deriveAdvancedDecision(
     longScore += longMicro.score;
     longReasons.push(...longMicro.reasons);
 
-    if (longScore >= 7) {
+    if (longScore >= 5) {
       const stopPct = clamp(tf1.atrPct * 1.15, 0.0014, 0.0075);
       const takeProfitPct = stopPct * 1.9;
       const candidate = enrichEntryDecision(
@@ -1279,7 +1279,7 @@ export function deriveAdvancedDecision(
     shortScore += shortMicro.score;
     shortReasons.push(...shortMicro.reasons);
 
-    if (shortScore >= 7) {
+    if (shortScore >= 5) {
       const stopPct = clamp(tf1.atrPct * 1.15, 0.0014, 0.0075);
       const takeProfitPct = stopPct * 1.9;
       const candidate = enrichEntryDecision(
@@ -1335,7 +1335,7 @@ export function deriveAdvancedDecision(
       longReasons.push("liquidation flow supports mean reversion higher");
     }
 
-    if (longScore >= 7) {
+    if (longScore >= 5) {
       const stopPct = clamp(tf1.atrPct * 0.95, 0.0012, 0.0055);
       const takeProfitPct = stopPct * 1.4;
       const candidate = enrichEntryDecision(
@@ -1386,7 +1386,7 @@ export function deriveAdvancedDecision(
       shortReasons.push("liquidation flow supports mean reversion lower");
     }
 
-    if (shortScore >= 7) {
+    if (shortScore >= 5) {
       const stopPct = clamp(tf1.atrPct * 0.95, 0.0012, 0.0055);
       const takeProfitPct = stopPct * 1.4;
       const candidate = enrichEntryDecision(
