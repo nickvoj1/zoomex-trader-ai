@@ -213,7 +213,7 @@ function toStrategySettings(profile: ProfileRecord): StrategySettings {
   return {
     riskPct: clamp(Number(profile.max_risk_pct) || 0.5, 0.1, paperMode ? 2 : 1),
     leverage: Math.round(clamp(Number(profile.leverage) || 10, 1, paperMode ? 50 : 20)),
-    minConfidence: clamp(Number(profile.min_confidence) || 78, 60, 95),
+    minConfidence: clamp(Number(profile.min_confidence) || 78, 30, 95),
     dailyLossLimitPct: clamp(Number(profile.daily_loss_limit_pct) || 3, 0.5, 10),
     maxConsecutiveLosses: Math.round(clamp(Number(profile.max_consecutive_losses) || 3, 1, 8)),
     allowTrendTrades: profile.allow_trend_trades ?? true,
