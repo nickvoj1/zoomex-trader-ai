@@ -9,11 +9,10 @@ import {
 } from "../../src/lib/quant-research.ts";
 import {
   csvStringArg,
-  csvBooleanArg,
-  csvNumberArg,
   defaultStrategySettings,
   ensureParentDirectory,
   loadCandleDatasetFromCsv,
+  loadContextHistoryFromJsonFiles,
   loadMicrostructureHistoryFromJsonFiles,
   numberArg,
   parseArgs,
@@ -22,6 +21,7 @@ import {
   writeJson,
 } from "./shared";
 import {
+  fetchHistoricalContextSnapshots,
   fetchHistoricalMicrostructureSnapshots,
   insertModelArtifact,
   insertResearchRun,
@@ -32,7 +32,9 @@ export interface ResearchCycleOptions {
   outputDir?: string;
   userId?: string | null;
   snapshotsFiles?: string[];
+  contextFiles?: string[];
   microstructureLookbackMinutes?: number;
+  newsLookbackMinutes?: number;
   limit?: number;
   trainingCandles?: number;
   validationCandles?: number;
@@ -58,18 +60,39 @@ export async function runResearchCycle(options: ResearchCycleOptions): Promise<R
   const dataset = await loadCandleDatasetFromCsv(options.input);
   const candles = dataset.candles;
   const snapshotsFiles = options.snapshotsFiles ?? [];
+  const contextFiles = options.contextFiles ?? [];
   const firstCandle = candles[0];
   const lastCandle = candles.length > 0 ? candles[candles.length - 1] : undefined;
   const startAt = firstCandle?.timestamp ? new Date(firstCandle.timestamp - 30 * 60_000).toISOString() : undefined;
+  const contextStartAt = firstCandle?.timestamp
+    ? new Date(firstCandle.timestamp - 120 * 24 * 60 * 60_000).toISOString()
+    : undefined;
   const endAt = lastCandle?.timestamp ? new Date(lastCandle.timestamp + 60_000).toISOString() : undefined;
   const fileHistory = snapshotsFiles.length > 0 ? await loadMicrostructureHistoryFromJsonFiles(snapshotsFiles) : [];
+  const fileContextHistory = contextFiles.length > 0 ? await loadContextHistoryFromJsonFiles(contextFiles) : [];
   const supabaseHistory = await fetchHistoricalMicrostructureSnapshots({
     symbol: "BTCUSDT",
     startAt,
     endAt,
   }).catch(() => []);
-  const microstructureHistory = [...fileHistory, ...supabaseHistory];
+  const supabaseContextHistory = await fetchHistoricalContextSnapshots({
+    symbol: "BTCUSDT",
+    startAt: contextStartAt,
+    endAt,
+  }).catch(() => []);
+  const minTimestamp = firstCandle?.timestamp ? firstCandle.timestamp - 30 * 60_000 : Number.NEGATIVE_INFINITY;
+  const minContextTimestamp = firstCandle?.timestamp
+    ? firstCandle.timestamp - 120 * 24 * 60 * 60_000
+    : Number.NEGATIVE_INFINITY;
+  const maxTimestamp = lastCandle?.timestamp ? lastCandle.timestamp + 60_000 : Number.POSITIVE_INFINITY;
+  const microstructureHistory = [...fileHistory, ...supabaseHistory].filter(
+    (snapshot) => snapshot.timestamp >= minTimestamp && snapshot.timestamp <= maxTimestamp,
+  );
+  const contextHistory = [...fileContextHistory, ...supabaseContextHistory].filter(
+    (snapshot) => snapshot.timestamp >= minContextTimestamp && snapshot.timestamp <= maxTimestamp,
+  );
   const microstructureLookbackMs = (options.microstructureLookbackMinutes ?? 15) * 60_000;
+  const newsLookbackMs = (options.newsLookbackMinutes ?? 360) * 60_000;
   const base = defaultStrategySettings();
   const parameterSpace: ParameterSpace = {
     riskPct: [0.25, 0.5, 0.75],
@@ -103,14 +126,18 @@ export async function runResearchCycle(options: ResearchCycleOptions): Promise<R
     horizonBars: options.horizonBars ?? 15,
     moveThresholdPct: options.moveThresholdPct ?? 0.18,
     microstructureHistory,
+    contextHistory,
     microstructureLookbackMs,
+    newsLookbackMs,
   });
   const shortModel = trainLogisticModel(candles, best.settings, {
     side: "short",
     horizonBars: options.horizonBars ?? 15,
     moveThresholdPct: options.moveThresholdPct ?? 0.18,
     microstructureHistory,
+    contextHistory,
     microstructureLookbackMs,
+    newsLookbackMs,
   });
 
   const summary = {
@@ -135,6 +162,7 @@ export async function runResearchCycle(options: ResearchCycleOptions): Promise<R
     longDataset: longModel.dataset,
     shortDataset: shortModel.dataset,
     microstructureSnapshots: microstructureHistory.length,
+    contextSnapshots: contextHistory.length,
   };
 
   const sweepPath = path.join(outputDir, "parameter-sweep.json");
@@ -161,6 +189,8 @@ export async function runResearchCycle(options: ResearchCycleOptions): Promise<R
       candidates: candidates.length,
       outputDir,
       microstructureSnapshots: microstructureHistory.length,
+      contextSnapshots: contextHistory.length,
+      newsLookbackMinutes: options.newsLookbackMinutes ?? 360,
       dataQuality: dataset.quality,
     },
     summary,
@@ -215,7 +245,9 @@ async function main() {
     outputDir: stringArg(args, "output-dir", path.join("research", timestampedFile("cycle", "dir").replace(/\.dir$/, ""))),
     userId: stringArg(args, "user-id", process.env.BOT_USER_ID) ?? null,
     snapshotsFiles: csvStringArg(args, "snapshots-file"),
+    contextFiles: csvStringArg(args, "context-file"),
     microstructureLookbackMinutes: numberArg(args, "micro-lookback-minutes", 15),
+    newsLookbackMinutes: numberArg(args, "news-lookback-minutes", 360),
     limit: numberArg(args, "limit", 72),
     trainingCandles: numberArg(args, "training-candles", 8_000),
     validationCandles: numberArg(args, "validation-candles", 2_000),

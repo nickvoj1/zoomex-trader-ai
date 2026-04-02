@@ -22,8 +22,10 @@ import {
 import { fetchCrossVenueSnapshot } from "../_shared/market-intel.ts";
 import {
   extractFeatureMap,
+  HistoricalContextSnapshot,
   HistoricalMicrostructureSnapshot,
   LogisticModelArtifact,
+  prepareHistoricalContext,
   prepareHistoricalMicrostructure,
   predictLogisticProbability,
 } from "../_shared/quant-research.ts";
@@ -103,6 +105,12 @@ interface MicrostructureHistoryRow extends LiquidationMetricsRow {
   cross_venue_basis_bps: number | null;
 }
 
+interface ContextHistoryRow {
+  created_at: string;
+  snapshot_type: string | null;
+  raw_payload: Record<string, unknown> | null;
+}
+
 interface ModelArtifactRow {
   id: string;
   created_at: string;
@@ -153,6 +161,7 @@ interface ArtifactEligibilityLike {
 }
 
 const FORWARD_VALIDATION_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
+const DEFAULT_MODEL_NEWS_LOOKBACK_MS = 6 * 60 * 60 * 1000;
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
@@ -161,6 +170,11 @@ function clamp(value: number, min: number, max: number) {
 function numberFeature(features: StrategyDecision["features"], key: string, fallback = 0) {
   const value = features[key];
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+function safeNumber(value: unknown) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function buildExecutionProfile(settings: StrategySettings, decision: StrategyDecision) {
@@ -401,6 +415,49 @@ function rowToHistoricalMicrostructure(row: MicrostructureHistoryRow): Historica
   };
 }
 
+function extractContextPayload(row: ContextHistoryRow) {
+  const rawPayload = row.raw_payload;
+  if (rawPayload && typeof rawPayload === "object") {
+    if (rawPayload.context && typeof rawPayload.context === "object") {
+      return rawPayload.context as Record<string, unknown>;
+    }
+    return rawPayload;
+  }
+  return null;
+}
+
+function rowToHistoricalContext(row: ContextHistoryRow): HistoricalContextSnapshot | null {
+  const timestamp = Date.parse(row.created_at);
+  if (!Number.isFinite(timestamp)) {
+    return null;
+  }
+
+  const payload = extractContextPayload(row);
+  if (!payload) {
+    return null;
+  }
+
+  return {
+    timestamp,
+    newsEventCount: safeNumber(payload.news_event_count ?? payload.newsEventCount),
+    newsSentiment: safeNumber(payload.news_sentiment ?? payload.newsSentiment),
+    newsImpact: safeNumber(payload.news_impact ?? payload.newsImpact),
+    newsPositiveCount: safeNumber(payload.news_positive_count ?? payload.newsPositiveCount),
+    newsNegativeCount: safeNumber(payload.news_negative_count ?? payload.newsNegativeCount),
+    newsBtcRelevance: safeNumber(payload.news_btc_relevance ?? payload.newsBtcRelevance),
+    newsShockScore: safeNumber(payload.news_shock_score ?? payload.newsShockScore),
+    macroCpiYoY: safeNumber(payload.macro_cpi_yoy ?? payload.macroCpiYoY),
+    macroCpiMoM: safeNumber(payload.macro_cpi_mom ?? payload.macroCpiMoM),
+    macroCoreCpiYoY: safeNumber(payload.macro_core_cpi_yoy ?? payload.macroCoreCpiYoY),
+    macroCoreCpiMoM: safeNumber(payload.macro_core_cpi_mom ?? payload.macroCoreCpiMoM),
+    macroUnemploymentRate: safeNumber(payload.macro_unemployment_rate ?? payload.macroUnemploymentRate),
+    macroUnemploymentChange: safeNumber(payload.macro_unemployment_change ?? payload.macroUnemploymentChange),
+    macroInflationTrend: safeNumber(payload.macro_inflation_trend ?? payload.macroInflationTrend),
+    macroRiskBias: safeNumber(payload.macro_risk_bias ?? payload.macroRiskBias),
+    source: typeof payload.source === "string" ? payload.source : row.snapshot_type ?? "supabase",
+  };
+}
+
 async function getRecentMicrostructureHistory(
   supabaseAdmin: ReturnType<typeof createAdminClient>,
   windowMinutes = 90,
@@ -427,6 +484,48 @@ async function getRecentMicrostructureHistory(
     ((data ?? []) as MicrostructureHistoryRow[])
       .map((row) => rowToHistoricalMicrostructure(row))
       .filter((row): row is HistoricalMicrostructureSnapshot => row !== null),
+  );
+}
+
+async function getRecentContextHistory(
+  supabaseAdmin: ReturnType<typeof createAdminClient>,
+  options: { newsWindowHours?: number; macroWindowDays?: number } = {},
+) {
+  const newsWindowHours = options.newsWindowHours ?? 48;
+  const macroWindowDays = options.macroWindowDays ?? 120;
+  const sinceNewsIso = new Date(Date.now() - newsWindowHours * 60 * 60_000).toISOString();
+  const sinceMacroIso = new Date(Date.now() - macroWindowDays * 24 * 60 * 60_000).toISOString();
+
+  const [newsResult, macroResult] = await Promise.all([
+    supabaseAdmin
+      .from("market_snapshots")
+      .select("created_at, snapshot_type, raw_payload")
+      .eq("snapshot_type", "news_context")
+      .in("symbol", [DB_SYMBOL, SYMBOL])
+      .gte("created_at", sinceNewsIso)
+      .order("created_at", { ascending: true })
+      .limit(500),
+    supabaseAdmin
+      .from("market_snapshots")
+      .select("created_at, snapshot_type, raw_payload")
+      .eq("snapshot_type", "macro_context")
+      .in("symbol", [DB_SYMBOL, SYMBOL])
+      .gte("created_at", sinceMacroIso)
+      .order("created_at", { ascending: true })
+      .limit(48),
+  ]);
+
+  if (newsResult.error) {
+    console.error("Failed to load news context history:", newsResult.error);
+  }
+  if (macroResult.error) {
+    console.error("Failed to load macro context history:", macroResult.error);
+  }
+
+  return prepareHistoricalContext(
+    ([...(newsResult.data ?? []), ...(macroResult.data ?? [])] as ContextHistoryRow[])
+      .map((row) => rowToHistoricalContext(row))
+      .filter((row): row is HistoricalContextSnapshot => row !== null),
   );
 }
 
@@ -670,6 +769,8 @@ function applyModelOverlay(
   microstructureOptions: {
     liveMicrostructure?: Parameters<typeof buildMarketState>[3];
     microstructureHistory?: HistoricalMicrostructureSnapshot[];
+    contextHistory?: HistoricalContextSnapshot[];
+    newsLookbackMs?: number;
   } = {},
 ) {
   if (!models.longModel && !models.shortModel) {
@@ -679,6 +780,8 @@ function applyModelOverlay(
   const { featureMap } = extractFeatureMap(candles, candles.length - 1, settings, {
     liveMicrostructure: microstructureOptions.liveMicrostructure ?? null,
     microstructureHistory: microstructureOptions.microstructureHistory ?? [],
+    contextHistory: microstructureOptions.contextHistory ?? [],
+    newsLookbackMs: microstructureOptions.newsLookbackMs ?? DEFAULT_MODEL_NEWS_LOOKBACK_MS,
   });
   const longProbability = models.longModel ? predictLogisticProbability(models.longModel, featureMap) : null;
   const shortProbability = models.shortModel ? predictLogisticProbability(models.shortModel, featureMap) : null;
@@ -747,6 +850,47 @@ function applyModelOverlay(
       `${decision.reasoning} · model ${delta >= 0 ? "confirmed" : "tempered"} ${decision.action} ` +
       `(${(selectedProbability * 100).toFixed(1)}%, edge ${(modelEdge * 100).toFixed(1)}pts)`,
     features,
+  };
+}
+
+function deriveTrainingVolatilityBucket(marketState: ReturnType<typeof buildMarketState>) {
+  const combined = marketState.timeframe1m.atrPct * 100 + marketState.timeframe15m.realizedVolPct * 0.35;
+  if (combined < 0.35) return "compressed" as const;
+  if (combined > 0.95) return "expanded" as const;
+  return "normal" as const;
+}
+
+function applyCompressedLongRegimeGate(
+  decision: StrategyDecision,
+  marketState: ReturnType<typeof buildMarketState>,
+) {
+  const volatilityBucket = deriveTrainingVolatilityBucket(marketState);
+  const features = {
+    ...decision.features,
+    liveVolatilityBucket: volatilityBucket,
+    compressedLongGate: false,
+  };
+
+  if (
+    decision.action !== "long" ||
+    decision.regime !== "trend_long" ||
+    volatilityBucket !== "compressed"
+  ) {
+    return {
+      ...decision,
+      features,
+    };
+  }
+
+  return {
+    ...decision,
+    action: "hold" as TradeAction,
+    confidence: clamp(decision.confidence - 18, 0, 99),
+    reasoning: `${decision.reasoning} · compressed trend-long regime gated`,
+    features: {
+      ...features,
+      compressedLongGate: true,
+    },
   };
 }
 
@@ -1305,6 +1449,9 @@ Deno.serve(async (req) => {
       }
 
       const sessionRisk = await getSessionRiskState(supabaseAdmin, userId);
+      const modelContextHistory = loadedModels.longModel || loadedModels.shortModel
+        ? await getRecentContextHistory(supabaseAdmin)
+        : [];
       let decision: StrategyDecision;
 
       if (manualSide) {
@@ -1327,9 +1474,11 @@ Deno.serve(async (req) => {
           crossVenueSnapshot.microstructure,
         );
         decision = deriveAdvancedDecision(marketState, settings, sessionRisk);
+        decision = applyCompressedLongRegimeGate(decision, marketState);
         decision = applyModelOverlay(candles, settings, decision, models, {
           liveMicrostructure: crossVenueSnapshot.microstructure,
           microstructureHistory: modelMicrostructureHistory,
+          contextHistory: modelContextHistory,
         });
         decision = await applyAiOverlay(keys, decision, marketState, manualSide);
         if (!paperMode && !(forwardValidation?.allowsLiveEntries ?? false) && (decision.action === "long" || decision.action === "short")) {

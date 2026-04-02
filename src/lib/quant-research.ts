@@ -88,7 +88,7 @@ export interface TrainingExample {
   regimeSegment: string;
   sessionBucket: "asia" | "europe" | "us" | "offhours";
   volatilityBucket: "compressed" | "normal" | "expanded";
-  decision: StrategyDecision;
+  action: StrategyDecision["action"];
   futureReturnPct: number;
   netFutureReturnPct: number;
   futureMaxUpPct: number;
@@ -97,7 +97,6 @@ export interface TrainingExample {
   adverseAllowancePct: number;
   labelLong: number;
   labelShort: number;
-  featureMap: Record<string, number>;
   features: number[];
 }
 
@@ -107,11 +106,36 @@ export interface HistoricalMicrostructureSnapshot {
   source?: string | null;
 }
 
+export interface HistoricalContextSnapshot {
+  timestamp: number;
+  newsEventCount?: number | null;
+  newsSentiment?: number | null;
+  newsImpact?: number | null;
+  newsPositiveCount?: number | null;
+  newsNegativeCount?: number | null;
+  newsBtcRelevance?: number | null;
+  newsShockScore?: number | null;
+  macroCpiYoY?: number | null;
+  macroCpiMoM?: number | null;
+  macroCoreCpiYoY?: number | null;
+  macroCoreCpiMoM?: number | null;
+  macroUnemploymentRate?: number | null;
+  macroUnemploymentChange?: number | null;
+  macroInflationTrend?: number | null;
+  macroRiskBias?: number | null;
+  source?: string | null;
+}
+
 export interface FeatureExtractionOptions {
   microstructureHistory?: HistoricalMicrostructureSnapshot[] | null;
+  contextHistory?: HistoricalContextSnapshot[] | null;
   liveMicrostructure?: MarketMicrostructure | null;
   microstructureLookbackMs?: number;
+  newsLookbackMs?: number;
   historyLookbackCandles?: number;
+  candidateSide?: "long" | "short" | null;
+  progressExampleInterval?: number;
+  onProgress?: ((update: TrainingProgressUpdate) => void) | null;
 }
 
 export interface BinaryClassificationMetrics {
@@ -208,16 +232,40 @@ export interface TrainLogisticOptions {
   learningRate?: number;
   regularization?: number;
   microstructureHistory?: HistoricalMicrostructureSnapshot[];
+  contextHistory?: HistoricalContextSnapshot[];
   microstructureLookbackMs?: number;
+  newsLookbackMs?: number;
   historyLookbackCandles?: number;
   maxTrainExamplesPerSegment?: number;
   candidateOnly?: boolean;
+  progressExampleInterval?: number;
+  progressEpochInterval?: number;
+  onProgress?: ((update: TrainingProgressUpdate) => void) | null;
+}
+
+export interface TrainingProgressUpdate {
+  phase:
+    | "loading"
+    | "building_examples"
+    | "filtering_candidates"
+    | "splitting"
+    | "balancing"
+    | "training_epochs"
+    | "evaluating"
+    | "completed";
+  current?: number;
+  total?: number;
+  percent?: number;
+  side?: "long" | "short";
+  message?: string;
+  details?: Record<string, number | string | boolean | null>;
 }
 
 const DEFAULT_OBJECTIVE: SweepObjective = "composite";
 const DEFAULT_HISTORY_LOOKBACK_CANDLES = 900;
 const DEFAULT_MAX_TRAIN_EXAMPLES_PER_SEGMENT = 400;
 const MIN_MODEL_PRECISION_FLOOR = 0.5;
+const DEFAULT_NEWS_LOOKBACK_MS = 6 * 60 * 60 * 1000;
 
 function round(value: number, precision = 4) {
   return Number(value.toFixed(precision));
@@ -225,6 +273,14 @@ function round(value: number, precision = 4) {
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
+}
+
+function emitTrainingProgress(
+  callback: ((update: TrainingProgressUpdate) => void) | null | undefined,
+  update: TrainingProgressUpdate,
+) {
+  if (!callback) return;
+  callback(update);
 }
 
 function average(values: number[]) {
@@ -457,12 +513,23 @@ export function prepareHistoricalMicrostructure(history: HistoricalMicrostructur
     .sort((left, right) => left.timestamp - right.timestamp);
 }
 
+export function prepareHistoricalContext(history: HistoricalContextSnapshot[] = []) {
+  return [...history]
+    .filter((entry) => Number.isFinite(entry.timestamp))
+    .sort((left, right) => left.timestamp - right.timestamp);
+}
+
 interface HistoricalMicrostructureContext {
   current: MarketMicrostructure | null;
   recent: HistoricalMicrostructureSnapshot[];
 }
 
-function upperBoundByTimestamp(history: HistoricalMicrostructureSnapshot[], timestamp: number) {
+interface HistoricalContextWindow {
+  recentNews: HistoricalContextSnapshot[];
+  latestMacro: HistoricalContextSnapshot | null;
+}
+
+function upperBoundByTimestamp<T extends { timestamp: number }>(history: T[], timestamp: number) {
   let low = 0;
   let high = history.length;
   while (low < high) {
@@ -471,6 +538,31 @@ function upperBoundByTimestamp(history: HistoricalMicrostructureSnapshot[], time
     else high = mid;
   }
   return low;
+}
+
+function hasNewsFields(entry: HistoricalContextSnapshot) {
+  return (
+    finiteNumber(entry.newsEventCount) !== null ||
+    finiteNumber(entry.newsSentiment) !== null ||
+    finiteNumber(entry.newsImpact) !== null ||
+    finiteNumber(entry.newsPositiveCount) !== null ||
+    finiteNumber(entry.newsNegativeCount) !== null ||
+    finiteNumber(entry.newsBtcRelevance) !== null ||
+    finiteNumber(entry.newsShockScore) !== null
+  );
+}
+
+function hasMacroFields(entry: HistoricalContextSnapshot) {
+  return (
+    finiteNumber(entry.macroCpiYoY) !== null ||
+    finiteNumber(entry.macroCpiMoM) !== null ||
+    finiteNumber(entry.macroCoreCpiYoY) !== null ||
+    finiteNumber(entry.macroCoreCpiMoM) !== null ||
+    finiteNumber(entry.macroUnemploymentRate) !== null ||
+    finiteNumber(entry.macroUnemploymentChange) !== null ||
+    finiteNumber(entry.macroInflationTrend) !== null ||
+    finiteNumber(entry.macroRiskBias) !== null
+  );
 }
 
 function resolveHistoricalMicrostructureContext(
@@ -498,6 +590,38 @@ function resolveHistoricalMicrostructureContext(
   const current = liveMicrostructure ?? recentBase[recentBase.length - 1]?.microstructure ?? null;
 
   return { current, recent };
+}
+
+function resolveHistoricalContextWindow(
+  history: HistoricalContextSnapshot[] = [],
+  timestamp: number | undefined,
+  newsLookbackMs = DEFAULT_NEWS_LOOKBACK_MS,
+): HistoricalContextWindow {
+  if (timestamp === undefined || history.length === 0) {
+    return {
+      recentNews: [],
+      latestMacro: null,
+    };
+  }
+
+  const endExclusive = upperBoundByTimestamp(history, timestamp);
+  const lowerBoundTimestamp = timestamp - newsLookbackMs;
+  const startInclusive = upperBoundByTimestamp(history, lowerBoundTimestamp - 1);
+  const recentWindow = history.slice(startInclusive, endExclusive);
+
+  let latestMacro: HistoricalContextSnapshot | null = null;
+  for (let index = endExclusive - 1; index >= 0; index -= 1) {
+    const entry = history[index];
+    if (hasMacroFields(entry)) {
+      latestMacro = entry;
+      break;
+    }
+  }
+
+  return {
+    recentNews: recentWindow.filter((entry) => hasNewsFields(entry)),
+    latestMacro,
+  };
 }
 
 function extractMicrostructureFeatures(context: HistoricalMicrostructureContext) {
@@ -573,6 +697,58 @@ function extractMicrostructureFeatures(context: HistoricalMicrostructureContext)
     micro_basis_change_bps: (basisSeries[basisSeries.length - 1] ?? currentBasis) - (basisSeries[0] ?? currentBasis),
     micro_mark_index_basis_change_bps: (markIndexBasisSeries[markIndexBasisSeries.length - 1] ?? currentMarkIndexBasis) - (markIndexBasisSeries[0] ?? currentMarkIndexBasis),
     micro_premium_index_change_bps: (premiumSeries[premiumSeries.length - 1] ?? currentPremiumIndex) - (premiumSeries[0] ?? currentPremiumIndex),
+  };
+}
+
+function extractContextFeatures(context: HistoricalContextWindow, timestamp: number | undefined) {
+  const recentNews = context.recentNews;
+  const latestMacro = context.latestMacro;
+  const newsEventCountSeries = recentNews.map((entry) => finiteNumber(entry.newsEventCount) ?? 1);
+  const newsSentimentSeries = recentNews.map((entry) => finiteNumber(entry.newsSentiment) ?? 0);
+  const newsImpactSeries = recentNews.map((entry) => finiteNumber(entry.newsImpact) ?? 0);
+  const newsPositiveSeries = recentNews.map((entry) => finiteNumber(entry.newsPositiveCount) ?? 0);
+  const newsNegativeSeries = recentNews.map((entry) => finiteNumber(entry.newsNegativeCount) ?? 0);
+  const newsRelevanceSeries = recentNews.map((entry) => finiteNumber(entry.newsBtcRelevance) ?? 0);
+  const newsShockSeries = recentNews.map((entry) => finiteNumber(entry.newsShockScore) ?? 0);
+  const weightedSentimentValues = recentNews.map((entry) => {
+    const sentiment = finiteNumber(entry.newsSentiment) ?? 0;
+    const impact = finiteNumber(entry.newsImpact) ?? 0;
+    const relevance = finiteNumber(entry.newsBtcRelevance) ?? 0;
+    return sentiment * Math.max(impact, 0.1) * Math.max(relevance, 0.1);
+  });
+  const latestNewsTimestamp = recentNews[recentNews.length - 1]?.timestamp;
+  const minutesSinceLatestNews = timestamp !== undefined && latestNewsTimestamp !== undefined
+    ? Math.max(0, (timestamp - latestNewsTimestamp) / 60_000)
+    : 9_999;
+  const hoursSinceMacroRelease = timestamp !== undefined && latestMacro
+    ? Math.max(0, (timestamp - latestMacro.timestamp) / 3_600_000)
+    : 9_999;
+
+  return {
+    context_has_snapshot: recentNews.length > 0 || latestMacro ? 1 : 0,
+    news_event_count_sum: round(newsEventCountSeries.reduce((sum, value) => sum + value, 0), 6),
+    news_sentiment_mean: round(averageDefined(newsSentimentSeries), 6),
+    news_sentiment_weighted: round(averageDefined(weightedSentimentValues), 6),
+    news_impact_mean: round(averageDefined(newsImpactSeries), 6),
+    news_impact_sum: round(newsImpactSeries.reduce((sum, value) => sum + value, 0), 6),
+    news_positive_count: round(newsPositiveSeries.reduce((sum, value) => sum + value, 0), 6),
+    news_negative_count: round(newsNegativeSeries.reduce((sum, value) => sum + value, 0), 6),
+    news_btc_relevance_mean: round(averageDefined(newsRelevanceSeries), 6),
+    news_shock_score_mean: round(averageDefined(newsShockSeries), 6),
+    news_shock_score_max: round(Math.max(...newsShockSeries, 0), 6),
+    news_minutes_since_latest: round(minutesSinceLatestNews, 6),
+    macro_has_snapshot: latestMacro ? 1 : 0,
+    macro_cpi_yoy: finiteNumber(latestMacro?.macroCpiYoY) ?? 0,
+    macro_cpi_mom: finiteNumber(latestMacro?.macroCpiMoM) ?? 0,
+    macro_core_cpi_yoy: finiteNumber(latestMacro?.macroCoreCpiYoY) ?? 0,
+    macro_core_cpi_mom: finiteNumber(latestMacro?.macroCoreCpiMoM) ?? 0,
+    macro_unemployment_rate: finiteNumber(latestMacro?.macroUnemploymentRate) ?? 0,
+    macro_unemployment_change: finiteNumber(latestMacro?.macroUnemploymentChange) ?? 0,
+    macro_inflation_trend: finiteNumber(latestMacro?.macroInflationTrend) ?? 0,
+    macro_risk_bias: finiteNumber(latestMacro?.macroRiskBias) ?? 0,
+    macro_hours_since_release: round(hoursSinceMacroRelease, 6),
+    macro_release_window_24h: latestMacro && hoursSinceMacroRelease <= 24 ? 1 : 0,
+    macro_release_window_72h: latestMacro && hoursSinceMacroRelease <= 72 ? 1 : 0,
   };
 }
 
@@ -685,6 +861,30 @@ export const TRAINING_FEATURE_NAMES = [
   "micro_basis_change_bps",
   "micro_mark_index_basis_change_bps",
   "micro_premium_index_change_bps",
+  "context_has_snapshot",
+  "news_event_count_sum",
+  "news_sentiment_mean",
+  "news_sentiment_weighted",
+  "news_impact_mean",
+  "news_impact_sum",
+  "news_positive_count",
+  "news_negative_count",
+  "news_btc_relevance_mean",
+  "news_shock_score_mean",
+  "news_shock_score_max",
+  "news_minutes_since_latest",
+  "macro_has_snapshot",
+  "macro_cpi_yoy",
+  "macro_cpi_mom",
+  "macro_core_cpi_yoy",
+  "macro_core_cpi_mom",
+  "macro_unemployment_rate",
+  "macro_unemployment_change",
+  "macro_inflation_trend",
+  "macro_risk_bias",
+  "macro_hours_since_release",
+  "macro_release_window_24h",
+  "macro_release_window_72h",
 ] as const;
 
 export function extractFeatureMap(
@@ -704,6 +904,11 @@ export function extractFeatureMap(
     options.liveMicrostructure ?? null,
     options.microstructureLookbackMs ?? 15 * 60 * 1000,
   );
+  const contextWindow = resolveHistoricalContextWindow(
+    options.contextHistory ?? [],
+    timestamp,
+    options.newsLookbackMs ?? DEFAULT_NEWS_LOOKBACK_MS,
+  );
   const state = buildMarketState(stateCandles, null, null, microContext.current);
   const decision = deriveAdvancedDecision(state, settings, {
     startingBalance: 10_000,
@@ -721,6 +926,7 @@ export function extractFeatureMap(
     return typeof value === "number" && Number.isFinite(value) ? value : 0;
   };
   const microFeatures = extractMicrostructureFeatures(microContext);
+  const contextFeatures = extractContextFeatures(contextWindow, timestamp);
   const regimeStrength = clamp(
     Math.abs(tf15.emaSpreadPct) * 18 + tf15.adx * 0.8 + tf15.trendEfficiency * 22 + Math.abs(tf5.emaSlopePct) * 12,
     0,
@@ -812,6 +1018,7 @@ export function extractFeatureMap(
     micro_liquidation_pressure_change:
       (microContext.current?.liquidationBias ?? 0) *
       ((microFeatures.micro_pressure_trend ?? 0) + (microContext.current?.liquidationIntensity ?? 0)),
+    ...contextFeatures,
   };
 
   return {
@@ -833,22 +1040,39 @@ export function buildTrainingExamples(
 ) {
   const normalized = normalizeCandles(candles);
   const preparedMicrostructureHistory = prepareHistoricalMicrostructure(options.microstructureHistory ?? []);
+  const preparedContextHistory = prepareHistoricalContext(options.contextHistory ?? []);
   const warmup = 15 * 50;
   const costPct = (feeBps + slippageBps) / 100;
   const rows: TrainingExample[] = [];
+  const totalExamples = Math.max(0, normalized.length - warmup - horizonBars);
+  const progressInterval = Math.max(1, options.progressExampleInterval ?? 10_000);
+  const candidateSide = options.candidateSide ?? null;
+
+  emitTrainingProgress(options.onProgress, {
+    phase: "building_examples",
+    current: 0,
+    total: totalExamples,
+    percent: totalExamples === 0 ? 100 : 0,
+    message: "Building training examples from candles and microstructure",
+  });
 
   for (let index = warmup; index + horizonBars < normalized.length; index += 1) {
     const current = normalized[index];
-    const futureSlice = normalized.slice(index + 1, index + 1 + horizonBars);
-    const futureClose = futureSlice[futureSlice.length - 1].close;
-    const futureMaxHigh = Math.max(...futureSlice.map((candle) => candle.high));
-    const futureMinLow = Math.min(...futureSlice.map((candle) => candle.low));
+    let futureMaxHigh = Number.NEGATIVE_INFINITY;
+    let futureMinLow = Number.POSITIVE_INFINITY;
+    for (let futureIndex = index + 1; futureIndex <= index + horizonBars; futureIndex += 1) {
+      const futureCandle = normalized[futureIndex];
+      if (futureCandle.high > futureMaxHigh) futureMaxHigh = futureCandle.high;
+      if (futureCandle.low < futureMinLow) futureMinLow = futureCandle.low;
+    }
+    const futureClose = normalized[index + horizonBars].close;
     const futureReturnPct = ((futureClose - current.close) / current.close) * 100;
     const futureMaxUpPct = ((futureMaxHigh - current.close) / current.close) * 100;
     const futureMaxDownPct = ((current.close - futureMinLow) / current.close) * 100;
     const { decision, featureMap, features } = extractFeatureMap(normalized, index, settings, {
       ...options,
       microstructureHistory: preparedMicrostructureHistory,
+      contextHistory: preparedContextHistory,
     });
     const expectedCostPct = Math.max((featureMap.expected_cost_bps ?? 0) / 100, costPct);
     const dynamicMoveThresholdPct = Math.max(
@@ -875,6 +1099,29 @@ export function buildTrainingExamples(
       futureMaxUpPct <= adverseAllowancePct * 1.1 &&
       futureReturnPct <= dynamicMoveThresholdPct * 0.2
     ) ? 1 : 0;
+    const processedExamples = index - warmup + 1;
+
+    if (candidateSide && decision.action !== candidateSide) {
+      if (
+        processedExamples === totalExamples ||
+        processedExamples === 1 ||
+        processedExamples % progressInterval === 0
+      ) {
+        emitTrainingProgress(options.onProgress, {
+          phase: "building_examples",
+          current: processedExamples,
+          total: totalExamples,
+          percent: totalExamples === 0 ? 100 : round((processedExamples / totalExamples) * 100, 2),
+          message: "Building training examples from candles and microstructure",
+          details: {
+            retainedExamples: rows.length,
+            candidateSide,
+          },
+        });
+      }
+      continue;
+    }
+
     const sessionBucket = deriveSessionBucket(featureMap.hour_utc ?? 0);
     const volatilityBucket = deriveVolatilityBucket(featureMap.tf1_atr_pct ?? 0, featureMap.tf15_realized_vol_pct ?? 0);
 
@@ -884,7 +1131,7 @@ export function buildTrainingExamples(
       regimeSegment: buildRegimeSegment(decision.regime, sessionBucket, volatilityBucket, decision.setupType),
       sessionBucket,
       volatilityBucket,
-      decision,
+      action: decision.action,
       futureReturnPct: round(futureReturnPct, 6),
       netFutureReturnPct: round(netFutureReturnPct, 6),
       futureMaxUpPct: round(futureMaxUpPct, 6),
@@ -893,9 +1140,26 @@ export function buildTrainingExamples(
       adverseAllowancePct: round(adverseAllowancePct, 6),
       labelLong,
       labelShort,
-      featureMap,
       features,
     });
+
+    if (
+      processedExamples === totalExamples ||
+      processedExamples === 1 ||
+      processedExamples % progressInterval === 0
+    ) {
+      emitTrainingProgress(options.onProgress, {
+        phase: "building_examples",
+        current: processedExamples,
+        total: totalExamples,
+        percent: totalExamples === 0 ? 100 : round((processedExamples / totalExamples) * 100, 2),
+        message: "Building training examples from candles and microstructure",
+        details: {
+          retainedExamples: rows.length,
+          candidateSide,
+        },
+      });
+    }
   }
 
   return rows;
@@ -936,6 +1200,31 @@ function sampleEvenly<T>(items: T[], targetCount: number) {
 
 function labelForExample(example: TrainingExample, side: "long" | "short") {
   return side === "long" ? example.labelLong : example.labelShort;
+}
+
+function isCompressedTrendLongExample(example: TrainingExample, side: "long" | "short") {
+  return side === "long" &&
+    example.action === "long" &&
+    example.regime === "trend_long" &&
+    example.volatilityBucket === "compressed";
+}
+
+export function gateCompressedLongTrainingExamples(
+  examples: TrainingExample[],
+  side: "long" | "short",
+) {
+  if (side !== "long") {
+    return {
+      examples: [...examples],
+      removed: 0,
+    };
+  }
+
+  const filtered = examples.filter((example) => !isCompressedTrendLongExample(example, side));
+  return {
+    examples: filtered,
+    removed: examples.length - filtered.length,
+  };
 }
 
 export function rebalanceTrainingExamplesBySegment(
@@ -1319,18 +1608,83 @@ export function trainLogisticModel(
   const historyLookbackCandles = options.historyLookbackCandles ?? DEFAULT_HISTORY_LOOKBACK_CANDLES;
   const maxTrainExamplesPerSegment = options.maxTrainExamplesPerSegment ?? DEFAULT_MAX_TRAIN_EXAMPLES_PER_SEGMENT;
   const candidateOnly = options.candidateOnly ?? true;
+  const progressEpochInterval = Math.max(1, options.progressEpochInterval ?? Math.max(5, Math.round(epochs / 20)));
+
+  emitTrainingProgress(options.onProgress, {
+    phase: "loading",
+    side: options.side,
+    percent: 0,
+    message: "Preparing training data",
+    details: {
+      candles: candles.length,
+      microstructureSnapshots: options.microstructureHistory?.length ?? 0,
+      contextSnapshots: options.contextHistory?.length ?? 0,
+      epochs,
+    },
+  });
   const rawExamples = buildTrainingExamples(candles, settings, horizonBars, moveThresholdPct, feeBps, slippageBps, {
     microstructureHistory: options.microstructureHistory,
+    contextHistory: options.contextHistory,
     microstructureLookbackMs: options.microstructureLookbackMs,
+    newsLookbackMs: options.newsLookbackMs,
     historyLookbackCandles,
+    candidateSide: candidateOnly ? options.side : null,
+    progressExampleInterval: options.progressExampleInterval,
+    onProgress: (update) => emitTrainingProgress(options.onProgress, { ...update, side: options.side }),
   });
-  const examples = candidateOnly
-    ? rawExamples.filter((example) => example.decision.action === options.side)
-    : rawExamples;
+  emitTrainingProgress(options.onProgress, {
+    phase: "filtering_candidates",
+    side: options.side,
+    current: rawExamples.length,
+    total: rawExamples.length,
+    percent: 100,
+    message: "Built raw training examples",
+    details: {
+      rawExamples: rawExamples.length,
+    },
+  });
+  const gatedExamples = gateCompressedLongTrainingExamples(rawExamples, options.side);
+  const examples = gatedExamples.examples;
+  emitTrainingProgress(options.onProgress, {
+    phase: "filtering_candidates",
+    side: options.side,
+    current: examples.length,
+    total: rawExamples.length,
+    percent: rawExamples.length === 0 ? 100 : round((examples.length / rawExamples.length) * 100, 2),
+    message: "Filtered live-aligned candidate examples",
+    details: {
+      rawExamples: rawExamples.length,
+      candidateExamples: examples.length,
+      gatedCompressedLongExamples: gatedExamples.removed,
+      candidateOnly,
+    },
+  });
   const splits = splitExamples(examples);
   const { validation, test } = splits;
+  emitTrainingProgress(options.onProgress, {
+    phase: "splitting",
+    side: options.side,
+    percent: 100,
+    message: "Split examples into train, validation, and test",
+    details: {
+      trainExamples: splits.train.length,
+      validationExamples: validation.length,
+      testExamples: test.length,
+    },
+  });
   const balancedTraining = rebalanceTrainingExamplesBySegment(splits.train, maxTrainExamplesPerSegment, options.side);
   const train = balancedTraining.examples;
+  emitTrainingProgress(options.onProgress, {
+    phase: "balancing",
+    side: options.side,
+    percent: 100,
+    message: "Balanced training examples across segments",
+    details: {
+      rawTrainExamples: splits.train.length,
+      balancedTrainExamples: train.length,
+      balancedSegmentCount: balancedTraining.balancedSegmentCount,
+    },
+  });
   const trainRows = train.map((example) => example.features);
   const validationRows = validation.map((example) => example.features);
   const testRows = test.map((example) => example.features);
@@ -1343,6 +1697,20 @@ export function trainLogisticModel(
   const weights = Array.from({ length: TRAINING_FEATURE_NAMES.length }, () => 0);
   let bias = 0;
   const classWeights = balancedClassWeights(trainLabels);
+
+  emitTrainingProgress(options.onProgress, {
+    phase: "training_epochs",
+    side: options.side,
+    current: 0,
+    total: epochs,
+    percent: 0,
+    message: "Training logistic model",
+    details: {
+      balancedTrainExamples: train.length,
+      positiveWeight: round(classWeights.positive, 4),
+      negativeWeight: round(classWeights.negative, 4),
+    },
+  });
 
   for (let epoch = 0; epoch < epochs; epoch += 1) {
     const gradients = Array.from({ length: weights.length }, () => 0);
@@ -1366,8 +1734,30 @@ export function trainLogisticModel(
       weights[featureIndex] -= learningRate * ((gradients[featureIndex] / scale) + regularization * weights[featureIndex]);
     });
     bias -= learningRate * (biasGradient / scale);
+
+    const completedEpoch = epoch + 1;
+    if (
+      completedEpoch === epochs ||
+      completedEpoch === 1 ||
+      completedEpoch % progressEpochInterval === 0
+    ) {
+      emitTrainingProgress(options.onProgress, {
+        phase: "training_epochs",
+        side: options.side,
+        current: completedEpoch,
+        total: epochs,
+        percent: round((completedEpoch / epochs) * 100, 2),
+        message: "Training logistic model",
+      });
+    }
   }
 
+  emitTrainingProgress(options.onProgress, {
+    phase: "evaluating",
+    side: options.side,
+    percent: 0,
+    message: "Evaluating trained model",
+  });
   const threshold = optimalThreshold(normalizedValidation, validationLabels, weights, bias);
   const metrics = {
     train: evaluateLogistic(normalizedTrain, trainLabels, weights, bias, threshold),
@@ -1386,6 +1776,20 @@ export function trainLogisticModel(
     test: evaluateSegments(test, normalizedTest, testLabels, weights, bias, threshold, options.side),
   } satisfies RegimeMetricsBySplit;
   const eligibility = evaluateModelEligibility(dataset, metrics, regimeMetrics);
+
+  emitTrainingProgress(options.onProgress, {
+    phase: "completed",
+    side: options.side,
+    percent: 100,
+    message: "Training completed",
+    details: {
+      threshold,
+      approved: eligibility.approved,
+      validationPrecision: metrics.validation.precision,
+      testPrecision: metrics.test.precision,
+      totalExamples: dataset.totalExamples,
+    },
+  });
 
   return {
     side: options.side,

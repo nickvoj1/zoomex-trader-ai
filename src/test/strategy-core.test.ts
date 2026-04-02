@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  aggregateCandles,
   calculatePositionSize,
   deriveAdvancedDecision,
   FrameSnapshot,
@@ -120,6 +121,28 @@ describe("toStopAndTakeProfit", () => {
       riskReward: 2,
       features: {},
     })).toEqual({ stopPrice: 101, takeProfitPrice: 98 });
+  });
+});
+
+describe("aggregateCandles", () => {
+  it("normalizes second-based timestamps before bucketing", () => {
+    const startSeconds = 1_704_067_200;
+    const candles = Array.from({ length: 15 }, (_, index) => ({
+      timestamp: startSeconds + index * 60,
+      open: 100 + index,
+      high: 101 + index,
+      low: 99 + index,
+      close: 100.5 + index,
+      volume: 10,
+    }));
+
+    const aggregated = aggregateCandles(candles, 5);
+
+    expect(aggregated).toHaveLength(3);
+    expect(aggregated[0].timestamp).toBe(startSeconds * 1000);
+    expect(aggregated[0].open).toBe(100);
+    expect(aggregated[0].close).toBe(104.5);
+    expect(aggregated[0].volume).toBe(50);
   });
 });
 

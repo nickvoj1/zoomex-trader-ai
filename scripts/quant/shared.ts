@@ -9,7 +9,9 @@ import {
   StrategySettings,
 } from "../../src/lib/strategy-core";
 import {
+  HistoricalContextSnapshot,
   HistoricalMicrostructureSnapshot,
+  prepareHistoricalContext,
   prepareHistoricalMicrostructure,
 } from "../../src/lib/quant-research";
 
@@ -335,6 +337,75 @@ function toMicrostructure(entry: unknown): MarketMicrostructure | null {
   });
 }
 
+function extractContextPayload(entry: unknown) {
+  if (!entry || typeof entry !== "object") {
+    return null;
+  }
+
+  const record = entry as Record<string, unknown>;
+  if (record.context && typeof record.context === "object") {
+    return record.context as Record<string, unknown>;
+  }
+
+  const rawPayload = record.raw_payload;
+  if (rawPayload && typeof rawPayload === "object") {
+    const payloadRecord = rawPayload as Record<string, unknown>;
+    if (payloadRecord.context && typeof payloadRecord.context === "object") {
+      return payloadRecord.context as Record<string, unknown>;
+    }
+    return payloadRecord;
+  }
+
+  return record;
+}
+
+function toHistoricalContext(entry: unknown): HistoricalContextSnapshot | null {
+  if (!entry || typeof entry !== "object") {
+    return null;
+  }
+
+  const record = entry as Record<string, unknown>;
+  const context = extractContextPayload(entry);
+  if (!context) {
+    return null;
+  }
+
+  const timestamp = parseTimestamp(
+    record.published_at ??
+      record.publishedAt ??
+      record.released_at ??
+      record.releasedAt ??
+      record.fetchedAt ??
+      record.created_at ??
+      record.createdAt ??
+      record.timestamp ??
+      context.timestamp,
+  );
+  if (timestamp === null) {
+    return null;
+  }
+
+  return {
+    timestamp,
+    newsEventCount: safeNumber(context.news_event_count ?? context.newsEventCount),
+    newsSentiment: safeNumber(context.news_sentiment ?? context.newsSentiment),
+    newsImpact: safeNumber(context.news_impact ?? context.newsImpact),
+    newsPositiveCount: safeNumber(context.news_positive_count ?? context.newsPositiveCount),
+    newsNegativeCount: safeNumber(context.news_negative_count ?? context.newsNegativeCount),
+    newsBtcRelevance: safeNumber(context.news_btc_relevance ?? context.newsBtcRelevance),
+    newsShockScore: safeNumber(context.news_shock_score ?? context.newsShockScore),
+    macroCpiYoY: safeNumber(context.macro_cpi_yoy ?? context.macroCpiYoY),
+    macroCpiMoM: safeNumber(context.macro_cpi_mom ?? context.macroCpiMoM),
+    macroCoreCpiYoY: safeNumber(context.macro_core_cpi_yoy ?? context.macroCoreCpiYoY),
+    macroCoreCpiMoM: safeNumber(context.macro_core_cpi_mom ?? context.macroCoreCpiMoM),
+    macroUnemploymentRate: safeNumber(context.macro_unemployment_rate ?? context.macroUnemploymentRate),
+    macroUnemploymentChange: safeNumber(context.macro_unemployment_change ?? context.macroUnemploymentChange),
+    macroInflationTrend: safeNumber(context.macro_inflation_trend ?? context.macroInflationTrend),
+    macroRiskBias: safeNumber(context.macro_risk_bias ?? context.macroRiskBias),
+    source: typeof (context.source ?? record.source) === "string" ? String(context.source ?? record.source) : "json",
+  };
+}
+
 export async function loadMicrostructureHistoryFromJson(filePath: string): Promise<HistoricalMicrostructureSnapshot[]> {
   const text = await readFile(filePath, "utf8");
   const parsed = JSON.parse(text) as unknown;
@@ -367,6 +438,37 @@ export async function loadMicrostructureHistoryFromJsonFiles(filePaths: string[]
 
   const histories = await Promise.all(uniquePaths.map((filePath) => loadMicrostructureHistoryFromJson(filePath)));
   return prepareHistoricalMicrostructure(histories.flat());
+}
+
+export async function loadContextHistoryFromJson(filePath: string): Promise<HistoricalContextSnapshot[]> {
+  const text = await readFile(filePath, "utf8");
+  const parsed = JSON.parse(text) as unknown;
+  const candidates = Array.isArray(parsed)
+    ? parsed
+    : parsed && typeof parsed === "object" && Array.isArray((parsed as { snapshots?: unknown[] }).snapshots)
+      ? (parsed as { snapshots: unknown[] }).snapshots
+      : parsed && typeof parsed === "object" && Array.isArray((parsed as { articles?: unknown[] }).articles)
+        ? (parsed as { articles: unknown[] }).articles
+        : [];
+
+  const history: HistoricalContextSnapshot[] = [];
+  for (const entry of candidates) {
+    const snapshot = toHistoricalContext(entry);
+    if (!snapshot) continue;
+    history.push(snapshot);
+  }
+
+  return prepareHistoricalContext(history);
+}
+
+export async function loadContextHistoryFromJsonFiles(filePaths: string[]): Promise<HistoricalContextSnapshot[]> {
+  const uniquePaths = [...new Set(filePaths.map((filePath) => filePath.trim()).filter(Boolean))];
+  if (uniquePaths.length === 0) {
+    return [];
+  }
+
+  const histories = await Promise.all(uniquePaths.map((filePath) => loadContextHistoryFromJson(filePath)));
+  return prepareHistoricalContext(histories.flat());
 }
 
 export async function ensureParentDirectory(filePath: string) {

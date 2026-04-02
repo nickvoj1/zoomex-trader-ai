@@ -568,16 +568,20 @@ export function aggregateCandles(candles: MarketCandle[], intervalMinutes: numbe
   let current: MarketCandle | null = null;
 
   candles.forEach((candle, index) => {
-    const hasValidTimestamp = candle.timestamp !== undefined && candle.timestamp > 0;
-    const bucket = hasValidTimestamp
-      ? Math.floor(candle.timestamp / (intervalMinutes * 60 * 1000))
+    const normalizedTimestamp = candle.timestamp === undefined || !Number.isFinite(candle.timestamp) || candle.timestamp <= 0
+      ? undefined
+      : candle.timestamp < 1_000_000_000_000
+        ? candle.timestamp * 1000
+        : candle.timestamp;
+    const bucket = normalizedTimestamp !== undefined
+      ? Math.floor(normalizedTimestamp / (intervalMinutes * 60 * 1000))
       : Math.floor(index / intervalMinutes);
 
     if (currentBucket !== bucket || !current) {
       if (current) aggregated.push(current);
       currentBucket = bucket;
       current = {
-        timestamp: candle.timestamp,
+        timestamp: normalizedTimestamp,
         open: candle.open,
         high: candle.high,
         low: candle.low,

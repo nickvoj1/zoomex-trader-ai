@@ -14,6 +14,12 @@ import { toast } from "sonner";
 const PAPER_STARTING_BALANCE = 10_000;
 const MEXC_KLINE_URL = "https://contract.mexc.com/api/v1/contract/kline/BTC_USDT?interval=Min1&limit=60";
 
+function normalizeMexcTimestamp(value: unknown) {
+  const numeric = Number(value ?? 0);
+  if (!Number.isFinite(numeric) || numeric <= 0) return undefined;
+  return numeric < 1_000_000_000_000 ? numeric * 1000 : numeric;
+}
+
 type SignalRow = Tables<"signals">;
 type TradeRow = Tables<"trades">;
 
@@ -180,7 +186,7 @@ function mapKlinesToChartData(payload: unknown): CandlePoint[] {
       high: Number(item.high),
       low: Number(item.low),
       close: Number(item.close),
-      time: Number(item.time ?? item.t ?? 0),
+      time: normalizeMexcTimestamp(item.time ?? item.t),
     })));
   }
 
@@ -200,7 +206,7 @@ function mapKlinesToChartData(payload: unknown): CandlePoint[] {
         high: Number(arrays.high?.[index]),
         low: Number(arrays.low?.[index]),
         close: Number(close),
-        time: Number(arrays.time?.[index] ?? 0),
+        time: normalizeMexcTimestamp(arrays.time?.[index]),
       })),
     );
   }

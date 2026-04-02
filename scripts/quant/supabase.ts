@@ -1,12 +1,15 @@
 import { createClient } from "@supabase/supabase-js";
 import { buildMarketMicrostructure, MarketMicrostructure } from "../../src/lib/strategy-core";
 import {
+  HistoricalContextSnapshot,
   HistoricalMicrostructureSnapshot,
+  prepareHistoricalContext,
   prepareHistoricalMicrostructure,
 } from "../../src/lib/quant-research";
 
 interface MarketSnapshotRow {
   created_at: string;
+  snapshot_type?: string | null;
   raw_payload?: Record<string, unknown> | null;
   spread_bps?: number | null;
   imbalance?: number | null;
@@ -41,6 +44,49 @@ function rowToMicrostructure(row: MarketSnapshotRow): MarketMicrostructure | nul
     liquidationIntensity: safeNumber(row.liquidation_intensity),
     crossVenueBasisBps: safeNumber(row.cross_venue_basis_bps),
   });
+}
+
+function extractContextPayload(row: MarketSnapshotRow) {
+  const rawPayload = row.raw_payload;
+  if (rawPayload && typeof rawPayload === "object") {
+    if (rawPayload.context && typeof rawPayload.context === "object") {
+      return rawPayload.context as Record<string, unknown>;
+    }
+    return rawPayload;
+  }
+  return null;
+}
+
+function rowToHistoricalContext(row: MarketSnapshotRow): HistoricalContextSnapshot | null {
+  const timestamp = Date.parse(row.created_at);
+  if (!Number.isFinite(timestamp)) {
+    return null;
+  }
+
+  const payload = extractContextPayload(row);
+  if (!payload) {
+    return null;
+  }
+
+  return {
+    timestamp,
+    newsEventCount: safeNumber(payload.news_event_count ?? payload.newsEventCount),
+    newsSentiment: safeNumber(payload.news_sentiment ?? payload.newsSentiment),
+    newsImpact: safeNumber(payload.news_impact ?? payload.newsImpact),
+    newsPositiveCount: safeNumber(payload.news_positive_count ?? payload.newsPositiveCount),
+    newsNegativeCount: safeNumber(payload.news_negative_count ?? payload.newsNegativeCount),
+    newsBtcRelevance: safeNumber(payload.news_btc_relevance ?? payload.newsBtcRelevance),
+    newsShockScore: safeNumber(payload.news_shock_score ?? payload.newsShockScore),
+    macroCpiYoY: safeNumber(payload.macro_cpi_yoy ?? payload.macroCpiYoY),
+    macroCpiMoM: safeNumber(payload.macro_cpi_mom ?? payload.macroCpiMoM),
+    macroCoreCpiYoY: safeNumber(payload.macro_core_cpi_yoy ?? payload.macroCoreCpiYoY),
+    macroCoreCpiMoM: safeNumber(payload.macro_core_cpi_mom ?? payload.macroCoreCpiMoM),
+    macroUnemploymentRate: safeNumber(payload.macro_unemployment_rate ?? payload.macroUnemploymentRate),
+    macroUnemploymentChange: safeNumber(payload.macro_unemployment_change ?? payload.macroUnemploymentChange),
+    macroInflationTrend: safeNumber(payload.macro_inflation_trend ?? payload.macroInflationTrend),
+    macroRiskBias: safeNumber(payload.macro_risk_bias ?? payload.macroRiskBias),
+    source: typeof payload.source === "string" ? payload.source : row.snapshot_type ?? "supabase",
+  };
 }
 
 function maybeCreateSupabaseAdmin() {
@@ -100,6 +146,45 @@ export async function fetchHistoricalMicrostructureSnapshots(options: {
   }
 
   return prepareHistoricalMicrostructure(history);
+}
+
+export async function fetchHistoricalContextSnapshots(options: {
+  symbol?: string;
+  startAt?: string;
+  endAt?: string;
+  limit?: number;
+  snapshotTypes?: string[];
+} = {}): Promise<HistoricalContextSnapshot[]> {
+  const supabase = maybeCreateSupabaseAdmin();
+  if (!supabase) return [];
+
+  let query = supabase
+    .from("market_snapshots")
+    .select("created_at, snapshot_type, raw_payload")
+    .in("snapshot_type", options.snapshotTypes ?? ["news_context", "macro_context"])
+    .in("symbol", [options.symbol ?? "BTCUSDT", "BTC_USDT"])
+    .order("created_at", { ascending: true });
+
+  if (options.startAt) {
+    query = query.gte("created_at", options.startAt);
+  }
+  if (options.endAt) {
+    query = query.lte("created_at", options.endAt);
+  }
+  if (options.limit) {
+    query = query.limit(options.limit);
+  }
+
+  const { data, error } = await query;
+  if (error) {
+    throw error;
+  }
+
+  return prepareHistoricalContext(
+    ((data ?? []) as MarketSnapshotRow[])
+      .map((row) => rowToHistoricalContext(row))
+      .filter((row): row is HistoricalContextSnapshot => row !== null),
+  );
 }
 
 export async function insertResearchRun(payload: Record<string, unknown>) {
