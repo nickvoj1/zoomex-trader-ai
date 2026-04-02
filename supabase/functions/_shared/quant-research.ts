@@ -309,6 +309,15 @@ function safeLog10(value: number | null | undefined) {
   return numeric === null || numeric <= 0 ? 0 : Math.log10(numeric + 1);
 }
 
+function safeDivide(numerator: number | null | undefined, denominator: number | null | undefined) {
+  const top = finiteNumber(numerator);
+  const bottom = finiteNumber(denominator);
+  if (top === null || bottom === null || bottom === 0) {
+    return 0;
+  }
+  return top / bottom;
+}
+
 function sigmoid(value: number) {
   if (value < -35) return 0;
   if (value > 35) return 1;
@@ -634,6 +643,11 @@ function extractMicrostructureFeatures(context: HistoricalMicrostructureContext)
   const currentMarkIndexBasis = current?.markIndexBasisBps ?? currentBasis;
   const currentPremiumIndex = current?.premiumIndexBps ?? currentMarkIndexBasis;
   const currentCrowding = current?.crowdingScore ?? 0;
+  const currentTradeCount = current?.tradeCount1m ?? 0;
+  const currentTradeNotional = current?.tradeNotionalUsd1m ?? 0;
+  const currentAggressiveBuyNotional = current?.aggressiveBuyNotionalUsd1m ?? 0;
+  const currentAggressiveSellNotional = current?.aggressiveSellNotionalUsd1m ?? 0;
+  const currentAggressiveImbalance = current?.aggressiveFlowImbalance1m ?? current?.takerImbalance ?? 0;
   const currentPressure = averageDefined([
     currentPrimaryImbalance,
     currentSecondaryImbalance,
@@ -655,6 +669,9 @@ function extractMicrostructureFeatures(context: HistoricalMicrostructureContext)
   const markIndexBasisSeries = recent.map((entry) => entry.microstructure?.markIndexBasisBps ?? entry.microstructure?.crossVenueBasisBps ?? 0);
   const premiumSeries = recent.map((entry) => entry.microstructure?.premiumIndexBps ?? entry.microstructure?.markIndexBasisBps ?? entry.microstructure?.crossVenueBasisBps ?? 0);
   const crowdingSeries = recent.map((entry) => entry.microstructure?.crowdingScore ?? 0);
+  const tradeCountSeries = recent.map((entry) => entry.microstructure?.tradeCount1m ?? 0);
+  const tradeNotionalSeries = recent.map((entry) => entry.microstructure?.tradeNotionalUsd1m ?? 0);
+  const aggressiveImbalanceSeries = recent.map((entry) => entry.microstructure?.aggressiveFlowImbalance1m ?? entry.microstructure?.takerImbalance ?? 0);
 
   return {
     micro_has_snapshot: current ? 1 : 0,
@@ -671,6 +688,12 @@ function extractMicrostructureFeatures(context: HistoricalMicrostructureContext)
     micro_open_interest_change_pct: current?.openInterestChangePct ?? 0,
     micro_long_short_ratio: current?.longShortRatio ?? 1,
     micro_taker_imbalance: current?.takerImbalance ?? 0,
+    micro_trade_count_1m: currentTradeCount,
+    micro_trade_notional_log10_1m: safeLog10(currentTradeNotional),
+    micro_aggressive_buy_notional_log10_1m: safeLog10(currentAggressiveBuyNotional),
+    micro_aggressive_sell_notional_log10_1m: safeLog10(currentAggressiveSellNotional),
+    micro_aggressive_flow_imbalance_1m: currentAggressiveImbalance,
+    micro_tradeflow_buy_sell_ratio_1m: safeDivide(currentAggressiveBuyNotional, currentAggressiveSellNotional),
     micro_mark_price_log10: safeLog10(current?.markPriceUsd),
     micro_index_price_log10: safeLog10(current?.indexPriceUsd),
     micro_liquidation_bias: current?.liquidationBias ?? 0,
@@ -689,9 +712,16 @@ function extractMicrostructureFeatures(context: HistoricalMicrostructureContext)
     micro_premium_index_mean: averageDefined(recent.map((entry) => entry.microstructure?.premiumIndexBps ?? entry.microstructure?.markIndexBasisBps ?? entry.microstructure?.crossVenueBasisBps)),
     micro_open_interest_change_mean: averageDefined(recent.map((entry) => entry.microstructure?.openInterestChangePct)),
     micro_crowding_mean: averageDefined(recent.map((entry) => entry.microstructure?.crowdingScore)),
+    micro_trade_count_mean: averageDefined(tradeCountSeries),
+    micro_trade_notional_log10_mean: averageDefined(tradeNotionalSeries.map((value) => safeLog10(value))),
+    micro_aggressive_flow_imbalance_mean: averageDefined(aggressiveImbalanceSeries),
     micro_pressure_alignment: currentPressure,
     micro_pressure_trend: lastPressure - firstPressure,
     micro_basis_structure_gap: currentPremiumIndex - currentMarkIndexBasis,
+    micro_trade_count_change: (tradeCountSeries[tradeCountSeries.length - 1] ?? currentTradeCount) - (tradeCountSeries[0] ?? currentTradeCount),
+    micro_aggressive_flow_imbalance_trend:
+      (aggressiveImbalanceSeries[aggressiveImbalanceSeries.length - 1] ?? currentAggressiveImbalance) -
+      (aggressiveImbalanceSeries[0] ?? currentAggressiveImbalance),
     micro_crowding_change: (crowdingSeries[crowdingSeries.length - 1] ?? currentCrowding) - (crowdingSeries[0] ?? currentCrowding),
     micro_spread_change_bps: (spreadSeries[spreadSeries.length - 1] ?? currentSpread) - (spreadSeries[0] ?? currentSpread),
     micro_basis_change_bps: (basisSeries[basisSeries.length - 1] ?? currentBasis) - (basisSeries[0] ?? currentBasis),
@@ -831,6 +861,12 @@ export const TRAINING_FEATURE_NAMES = [
   "micro_open_interest_change_pct",
   "micro_long_short_ratio",
   "micro_taker_imbalance",
+  "micro_trade_count_1m",
+  "micro_trade_notional_log10_1m",
+  "micro_aggressive_buy_notional_log10_1m",
+  "micro_aggressive_sell_notional_log10_1m",
+  "micro_aggressive_flow_imbalance_1m",
+  "micro_tradeflow_buy_sell_ratio_1m",
   "micro_mark_price_log10",
   "micro_index_price_log10",
   "micro_liquidation_bias",
@@ -849,9 +885,14 @@ export const TRAINING_FEATURE_NAMES = [
   "micro_premium_index_mean",
   "micro_open_interest_change_mean",
   "micro_crowding_mean",
+  "micro_trade_count_mean",
+  "micro_trade_notional_log10_mean",
+  "micro_aggressive_flow_imbalance_mean",
   "micro_pressure_alignment",
   "micro_pressure_trend",
   "micro_basis_structure_gap",
+  "micro_trade_count_change",
+  "micro_aggressive_flow_imbalance_trend",
   "micro_pressure_divergence",
   "micro_oi_crowding_interaction",
   "micro_basis_taker_alignment",

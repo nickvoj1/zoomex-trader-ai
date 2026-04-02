@@ -437,6 +437,11 @@ function rowToHistoricalMicrostructure(row: MicrostructureHistoryRow): Historica
       liquidationBias: row.liquidation_bias,
       liquidationIntensity: row.liquidation_intensity,
       crossVenueBasisBps: row.cross_venue_basis_bps,
+      tradeCount1m: safeNumber((row as Record<string, unknown>).trade_count_1m),
+      tradeNotionalUsd1m: safeNumber((row as Record<string, unknown>).trade_notional_usd_1m),
+      aggressiveBuyNotionalUsd1m: safeNumber((row as Record<string, unknown>).aggressive_buy_notional_usd_1m),
+      aggressiveSellNotionalUsd1m: safeNumber((row as Record<string, unknown>).aggressive_sell_notional_usd_1m),
+      aggressiveFlowImbalance1m: safeNumber((row as Record<string, unknown>).aggressive_flow_imbalance_1m),
     }),
     source: "supabase",
   };

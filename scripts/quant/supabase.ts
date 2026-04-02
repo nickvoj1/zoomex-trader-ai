@@ -21,6 +21,11 @@ interface MarketSnapshotRow {
   liquidation_bias?: number | null;
   liquidation_intensity?: number | null;
   cross_venue_basis_bps?: number | null;
+  trade_count_1m?: number | null;
+  trade_notional_usd_1m?: number | null;
+  aggressive_buy_notional_usd_1m?: number | null;
+  aggressive_sell_notional_usd_1m?: number | null;
+  aggressive_flow_imbalance_1m?: number | null;
 }
 
 function safeNumber(value: unknown) {
@@ -43,6 +48,11 @@ function rowToMicrostructure(row: MarketSnapshotRow): MarketMicrostructure | nul
     liquidationBias: safeNumber(row.liquidation_bias),
     liquidationIntensity: safeNumber(row.liquidation_intensity),
     crossVenueBasisBps: safeNumber(row.cross_venue_basis_bps),
+    tradeCount1m: safeNumber(row.trade_count_1m),
+    tradeNotionalUsd1m: safeNumber(row.trade_notional_usd_1m),
+    aggressiveBuyNotionalUsd1m: safeNumber(row.aggressive_buy_notional_usd_1m),
+    aggressiveSellNotionalUsd1m: safeNumber(row.aggressive_sell_notional_usd_1m),
+    aggressiveFlowImbalance1m: safeNumber(row.aggressive_flow_imbalance_1m),
   });
 }
 

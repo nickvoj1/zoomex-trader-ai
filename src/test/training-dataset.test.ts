@@ -16,6 +16,11 @@ describe("aggregateAggTradeCsvLines", () => {
       source: "binance-aggtrades",
     });
     expect(snapshots[0]?.microstructure?.takerImbalance).toBeGreaterThan(0);
+    expect(snapshots[0]?.microstructure?.tradeCount1m).toBe(2);
+    expect(snapshots[0]?.microstructure?.tradeNotionalUsd1m).toBe(301);
+    expect(snapshots[0]?.microstructure?.aggressiveBuyNotionalUsd1m).toBe(200);
+    expect(snapshots[0]?.microstructure?.aggressiveSellNotionalUsd1m).toBe(101);
+    expect(snapshots[0]?.microstructure?.aggressiveFlowImbalance1m).toBeCloseTo(0.328904, 6);
     expect(snapshots[0]?.rawPayload?.tradeCount).toBe(2);
     expect(snapshots[1]?.timestamp).toBe(1711699260000);
   });
@@ -28,6 +33,8 @@ describe("aggregateAggTradeCsvLines", () => {
 
     expect(snapshots).toHaveLength(1);
     expect(snapshots[0]?.microstructure?.takerImbalance).toBe(0);
+    expect(snapshots[0]?.microstructure?.tradeCount1m).toBe(2);
+    expect(snapshots[0]?.microstructure?.aggressiveFlowImbalance1m).toBe(0);
     expect(snapshots[0]?.rawPayload?.totalNotionalUsd).toBe(200);
   });
 });

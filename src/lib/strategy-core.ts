@@ -79,6 +79,11 @@ export interface MarketMicrostructure {
   indexPriceUsd?: number | null;
   premiumIndexBps?: number | null;
   markIndexBasisBps?: number | null;
+  tradeCount1m?: number | null;
+  tradeNotionalUsd1m?: number | null;
+  aggressiveBuyNotionalUsd1m?: number | null;
+  aggressiveSellNotionalUsd1m?: number | null;
+  aggressiveFlowImbalance1m?: number | null;
 }
 
 export interface MarketState {
@@ -522,7 +527,12 @@ export function buildMarketMicrostructure(input: Partial<MarketMicrostructure> =
     input.markPriceUsd === undefined &&
     input.indexPriceUsd === undefined &&
     input.premiumIndexBps === undefined &&
-    input.markIndexBasisBps === undefined
+    input.markIndexBasisBps === undefined &&
+    input.tradeCount1m === undefined &&
+    input.tradeNotionalUsd1m === undefined &&
+    input.aggressiveBuyNotionalUsd1m === undefined &&
+    input.aggressiveSellNotionalUsd1m === undefined &&
+    input.aggressiveFlowImbalance1m === undefined
   ) {
     return null;
   }
@@ -543,6 +553,11 @@ export function buildMarketMicrostructure(input: Partial<MarketMicrostructure> =
     indexPriceUsd,
     premiumIndexBps,
     markIndexBasisBps,
+    tradeCount1m: input.tradeCount1m ?? null,
+    tradeNotionalUsd1m: input.tradeNotionalUsd1m ?? null,
+    aggressiveBuyNotionalUsd1m: input.aggressiveBuyNotionalUsd1m ?? null,
+    aggressiveSellNotionalUsd1m: input.aggressiveSellNotionalUsd1m ?? null,
+    aggressiveFlowImbalance1m: input.aggressiveFlowImbalance1m ?? input.takerImbalance ?? null,
   };
 }
 
@@ -737,6 +752,11 @@ function microstructureFeatures(
     openInterestChangePct: microstructure?.openInterestChangePct ?? null,
     longShortRatio: microstructure?.longShortRatio ?? null,
     takerImbalance: microstructure?.takerImbalance ?? null,
+    tradeCount1m: microstructure?.tradeCount1m ?? null,
+    tradeNotionalUsd1m: microstructure?.tradeNotionalUsd1m ?? null,
+    aggressiveBuyNotionalUsd1m: microstructure?.aggressiveBuyNotionalUsd1m ?? null,
+    aggressiveSellNotionalUsd1m: microstructure?.aggressiveSellNotionalUsd1m ?? null,
+    aggressiveFlowImbalance1m: microstructure?.aggressiveFlowImbalance1m ?? null,
     liquidationBias: microstructure?.liquidationBias ?? null,
     liquidationIntensity: microstructure?.liquidationIntensity ?? null,
     crossVenueBasisBps: microstructure?.crossVenueBasisBps ?? null,

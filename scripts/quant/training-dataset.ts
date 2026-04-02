@@ -314,6 +314,11 @@ export function aggregateAggTradeCsvLines(lines: string[]) {
           liquidationIntensity: null,
           crossVenueBasisBps: null,
           crowdingScore: bucket.totalNotionalUsd > 0 ? round(Math.log10(bucket.totalNotionalUsd + 1), 6) : null,
+          tradeCount1m: bucket.tradeCount,
+          tradeNotionalUsd1m: round(bucket.totalNotionalUsd, 6),
+          aggressiveBuyNotionalUsd1m: round(bucket.buyNotionalUsd, 6),
+          aggressiveSellNotionalUsd1m: round(bucket.sellNotionalUsd, 6),
+          aggressiveFlowImbalance1m: takerImbalance,
         },
         rawPayload: {
           tradeCount: bucket.tradeCount,

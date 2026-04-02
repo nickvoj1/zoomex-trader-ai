@@ -334,6 +334,11 @@ function toMicrostructure(entry: unknown): MarketMicrostructure | null {
     liquidationBias: safeNumber(record.liquidation_bias ?? record.liquidationBias),
     liquidationIntensity: safeNumber(record.liquidation_intensity ?? record.liquidationIntensity),
     crossVenueBasisBps: safeNumber(record.cross_venue_basis_bps ?? record.crossVenueBasisBps),
+    tradeCount1m: safeNumber(record.trade_count_1m ?? record.tradeCount1m),
+    tradeNotionalUsd1m: safeNumber(record.trade_notional_usd_1m ?? record.tradeNotionalUsd1m),
+    aggressiveBuyNotionalUsd1m: safeNumber(record.aggressive_buy_notional_usd_1m ?? record.aggressiveBuyNotionalUsd1m),
+    aggressiveSellNotionalUsd1m: safeNumber(record.aggressive_sell_notional_usd_1m ?? record.aggressiveSellNotionalUsd1m),
+    aggressiveFlowImbalance1m: safeNumber(record.aggressive_flow_imbalance_1m ?? record.aggressiveFlowImbalance1m),
   });
 }
 
