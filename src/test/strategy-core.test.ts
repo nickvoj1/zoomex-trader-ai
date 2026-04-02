@@ -267,6 +267,8 @@ describe("applyPrecisionFirstEventGuard", () => {
           news_shock_score_mean: 0.12,
           news_shock_score_max: 0.2,
           news_sentiment_mean: 0.08,
+          news_btc_relevance_mean: 0.5,
+          news_minutes_since_latest: 30,
           macro_risk_bias: 0.1,
           macro_release_window_24h: 0,
           macro_release_window_72h: 1,
