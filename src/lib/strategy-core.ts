@@ -1012,6 +1012,110 @@ function decisionFromScore(
   };
 }
 
+function decisionNumberFeature(decision: StrategyDecision, key: string, fallback = 0) {
+  const value = decision.features[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+export function applyPrecisionFirstEventGuard(
+  decision: StrategyDecision,
+  minConfidence: number,
+): StrategyDecision {
+  if (decision.action !== "long" && decision.action !== "short") {
+    return decision;
+  }
+
+  const direction = decision.action === "long" ? 1 : -1;
+  const newsShockMean = decisionNumberFeature(decision, "news_shock_score_mean");
+  const newsShockMax = decisionNumberFeature(decision, "news_shock_score_max");
+  const newsSentiment = decisionNumberFeature(decision, "news_sentiment_mean");
+  const newsRelevance = Math.max(decisionNumberFeature(decision, "news_btc_relevance_mean"), 0.1);
+  const newsMinutesSinceLatest = decisionNumberFeature(decision, "news_minutes_since_latest", 9_999);
+  const macroRiskBias = decisionNumberFeature(decision, "macro_risk_bias");
+  const macroRelease24h = decisionNumberFeature(decision, "macro_release_window_24h") >= 0.5;
+  const macroRelease72h = decisionNumberFeature(decision, "macro_release_window_72h") >= 0.5;
+  const modelEdge = decisionNumberFeature(decision, "modelEdge");
+  const modelDelta = decisionNumberFeature(decision, "modelDelta");
+  const qualityScore = decisionNumberFeature(
+    decision,
+    "qualityScore",
+    decisionNumberFeature(decision, "quality_composite", decision.confidence),
+  );
+  const crowdingScore = decisionNumberFeature(
+    decision,
+    "crowdingScore",
+    decisionNumberFeature(decision, "micro_crowding_score"),
+  );
+
+  const recentNews = newsMinutesSinceLatest <= 240;
+  const hotNewsWindow = recentNews && (newsShockMean >= 0.32 || newsShockMax >= 0.62);
+  const eventAlignedNewsPressure = direction * newsSentiment * newsRelevance;
+  const strongConviction =
+    qualityScore >= 76 &&
+    modelEdge >= 0.14 &&
+    modelDelta >= 0.03 &&
+    decision.confidence >= Math.max(minConfidence + 6, 82);
+  const crowdedEventSide = decision.action === "long" ? crowdingScore >= 5.2 : crowdingScore <= -5.2;
+
+  const blockReasons: string[] = [];
+  if (macroRelease24h && direction * macroRiskBias <= -0.3 && !strongConviction) {
+    blockReasons.push(`macro release bias opposes ${decision.action}`);
+  }
+  if (hotNewsWindow && eventAlignedNewsPressure <= -0.14 && newsShockMax >= 0.58 && !strongConviction) {
+    blockReasons.push(`news shock opposes ${decision.action}`);
+  }
+  if (crowdedEventSide && (macroRelease24h || hotNewsWindow) && modelEdge < 0.16) {
+    blockReasons.push(`${decision.action} crowding is too elevated for an event regime`);
+  }
+
+  const eventBuffer =
+    (macroRelease24h ? 4 : 0) +
+    ((macroRelease72h || hotNewsWindow) ? 2 : 0) +
+    (crowdedEventSide ? 2 : 0);
+  const requiredConfidence = clamp(minConfidence + eventBuffer, minConfidence, 96);
+  const guardFeatures = {
+    ...decision.features,
+    precisionGuardRequiredConfidence: requiredConfidence,
+    precisionGuardEventBuffer: eventBuffer,
+    precisionGuardHotNewsWindow: hotNewsWindow,
+    precisionGuardMacroRelease: macroRelease24h || macroRelease72h,
+    precisionGuardBlocked: false,
+  };
+
+  if (blockReasons.length > 0) {
+    return {
+      ...decision,
+      action: "hold",
+      confidence: clamp(decision.confidence - Math.max(8, eventBuffer * 2), 0, 99),
+      reasoning: `${decision.reasoning} · ${blockReasons.join(" · ")}`,
+      features: {
+        ...guardFeatures,
+        precisionGuardBlocked: true,
+        precisionGuardReason: blockReasons.join(" · "),
+      },
+    };
+  }
+
+  if (eventBuffer > 0 && decision.confidence < requiredConfidence) {
+    return {
+      ...decision,
+      action: "hold",
+      confidence: clamp(decision.confidence - Math.max(4, eventBuffer), 0, 99),
+      reasoning: `${decision.reasoning} · event regime requires ${requiredConfidence}+ confidence`,
+      features: {
+        ...guardFeatures,
+        precisionGuardBlocked: true,
+        precisionGuardReason: `event regime requires ${requiredConfidence}+ confidence`,
+      },
+    };
+  }
+
+  return {
+    ...decision,
+    features: guardFeatures,
+  };
+}
+
 export function deriveAdvancedDecision(
   state: MarketState,
   settings: StrategySettings,

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  applyPrecisionFirstEventGuard,
   aggregateCandles,
   calculatePositionSize,
   deriveAdvancedDecision,
@@ -206,5 +207,103 @@ describe("deriveAdvancedDecision safeguards", () => {
 
     expect(decision.action).toBe("close");
     expect(decision.reasoning).toContain("bearish");
+  });
+});
+
+describe("applyPrecisionFirstEventGuard", () => {
+  function eventDecision(overrides: Partial<ReturnType<typeof baseDecision>> = {}) {
+    return {
+      ...baseDecision(),
+      ...overrides,
+      features: {
+        ...baseDecision().features,
+        ...(overrides.features ?? {}),
+      },
+    };
+  }
+
+  function baseDecision() {
+    return {
+      action: "long" as const,
+      confidence: 82,
+      reasoning: "Trend long setup",
+      regime: "trend_long" as const,
+      setupType: "trend" as const,
+      stopPct: 0.002,
+      takeProfitPct: 0.004,
+      riskReward: 2,
+      features: {
+        qualityScore: 72,
+        modelEdge: 0.05,
+        modelDelta: 0.01,
+        news_shock_score_mean: 0.48,
+        news_shock_score_max: 0.76,
+        news_sentiment_mean: -0.36,
+        news_btc_relevance_mean: 0.85,
+        news_minutes_since_latest: 22,
+        macro_risk_bias: -0.42,
+        macro_release_window_24h: 1,
+        macro_release_window_72h: 1,
+        crowdingScore: 6.1,
+      },
+    };
+  }
+
+  it("blocks a weak long when macro release bias is hostile", () => {
+    const decision = applyPrecisionFirstEventGuard(eventDecision(), 78);
+
+    expect(decision.action).toBe("hold");
+    expect(decision.reasoning).toContain("macro release bias opposes long");
+    expect(decision.features.precisionGuardBlocked).toBe(true);
+  });
+
+  it("raises the confidence floor during event regimes", () => {
+    const decision = applyPrecisionFirstEventGuard(
+      eventDecision({
+        features: {
+          qualityScore: 84,
+          modelEdge: 0.18,
+          modelDelta: 0.06,
+          news_shock_score_mean: 0.12,
+          news_shock_score_max: 0.2,
+          news_sentiment_mean: 0.08,
+          macro_risk_bias: 0.1,
+          macro_release_window_24h: 0,
+          macro_release_window_72h: 1,
+          crowdingScore: 0,
+        },
+        confidence: 79,
+      }),
+      78,
+    );
+
+    expect(decision.action).toBe("hold");
+    expect(decision.reasoning).toContain("event regime requires");
+  });
+
+  it("allows aligned high-conviction event trades to pass", () => {
+    const decision = applyPrecisionFirstEventGuard(
+      eventDecision({
+        confidence: 90,
+        features: {
+          qualityScore: 88,
+          modelEdge: 0.22,
+          modelDelta: 0.08,
+          news_shock_score_mean: 0.45,
+          news_shock_score_max: 0.68,
+          news_sentiment_mean: 0.41,
+          news_btc_relevance_mean: 0.92,
+          news_minutes_since_latest: 18,
+          macro_risk_bias: 0.34,
+          macro_release_window_24h: 1,
+          macro_release_window_72h: 1,
+          crowdingScore: 1.4,
+        },
+      }),
+      78,
+    );
+
+    expect(decision.action).toBe("long");
+    expect(decision.features.precisionGuardBlocked).toBe(false);
   });
 });

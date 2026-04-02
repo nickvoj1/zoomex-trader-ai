@@ -9,6 +9,7 @@ import {
   submitOrder,
 } from "../_shared/mexc.ts";
 import {
+  applyPrecisionFirstEventGuard,
   buildMarketMicrostructure,
   buildMarketState,
   calculatePositionSize,
@@ -162,6 +163,21 @@ interface ArtifactEligibilityLike {
 
 const FORWARD_VALIDATION_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
 const DEFAULT_MODEL_NEWS_LOOKBACK_MS = 6 * 60 * 60 * 1000;
+const LIVE_OVERLAY_FEATURE_KEYS = [
+  "context_has_snapshot",
+  "news_event_count_sum",
+  "news_sentiment_mean",
+  "news_btc_relevance_mean",
+  "news_shock_score_mean",
+  "news_shock_score_max",
+  "news_minutes_since_latest",
+  "macro_has_snapshot",
+  "macro_risk_bias",
+  "macro_hours_since_release",
+  "macro_release_window_24h",
+  "macro_release_window_72h",
+  "micro_crowding_score",
+] as const;
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
@@ -175,6 +191,17 @@ function numberFeature(features: StrategyDecision["features"], key: string, fall
 function safeNumber(value: unknown) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function extractLiveOverlayFeatures(featureMap: Record<string, number>) {
+  const features: Record<string, number> = {};
+
+  LIVE_OVERLAY_FEATURE_KEYS.forEach((key) => {
+    const value = featureMap[key];
+    features[key] = Number.isFinite(value) ? Number(value.toFixed(6)) : 0;
+  });
+
+  return features;
 }
 
 function buildExecutionProfile(settings: StrategySettings, decision: StrategyDecision) {
@@ -773,10 +800,6 @@ function applyModelOverlay(
     newsLookbackMs?: number;
   } = {},
 ) {
-  if (!models.longModel && !models.shortModel) {
-    return decision;
-  }
-
   const { featureMap } = extractFeatureMap(candles, candles.length - 1, settings, {
     liveMicrostructure: microstructureOptions.liveMicrostructure ?? null,
     microstructureHistory: microstructureOptions.microstructureHistory ?? [],
@@ -787,11 +810,19 @@ function applyModelOverlay(
   const shortProbability = models.shortModel ? predictLogisticProbability(models.shortModel, featureMap) : null;
   const sharedFeatures = {
     ...decision.features,
+    ...extractLiveOverlayFeatures(featureMap),
     modelLongProbability: longProbability === null ? null : Number(longProbability.toFixed(6)),
     modelShortProbability: shortProbability === null ? null : Number(shortProbability.toFixed(6)),
     modelLongThreshold: models.longModel ? Number(models.longModel.threshold.toFixed(6)) : null,
     modelShortThreshold: models.shortModel ? Number(models.shortModel.threshold.toFixed(6)) : null,
   };
+
+  if (!models.longModel && !models.shortModel) {
+    return {
+      ...decision,
+      features: sharedFeatures,
+    };
+  }
 
   if (decision.action !== "long" && decision.action !== "short") {
     return {
@@ -1481,6 +1512,7 @@ Deno.serve(async (req) => {
           contextHistory: modelContextHistory,
         });
         decision = await applyAiOverlay(keys, decision, marketState, manualSide);
+        decision = applyPrecisionFirstEventGuard(decision, settings.minConfidence);
         if (!paperMode && !(forwardValidation?.allowsLiveEntries ?? false) && (decision.action === "long" || decision.action === "short")) {
           decision = {
             ...decision,
